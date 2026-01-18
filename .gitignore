@@ -13,7 +13,7 @@ html/
 import/
 
 # Generated files
-outputJS/attachmentsFile.js
+# (attachmentsFile.js is tracked with empty defaults, content is overwritten during import)
 
 # OS files
 .DS_Store
