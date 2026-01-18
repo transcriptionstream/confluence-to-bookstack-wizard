@@ -154,14 +154,19 @@ const printBanner = () => {
     return ' '.repeat(pad) + text + ' '.repeat(padRight);
   };
 
-  const title = 'Confluence to BookStack Importer';
-  const subtitle = 'Interactive Import Manager';
+  const title = 'Confluence to BookStack Wizard';
+  const subtitle = 'Interactive Migration Tool';
+  const author = 'an Affordable Magic product - https://affordablemagic.net';
+  const repo = 'github.com/transcriptionstream/confluence-to-bookstack-wizard';
 
   console.log('');
   console.log(`${colors.cyan}╔${line}╗${colors.reset}`);
   console.log(`${colors.cyan}║${empty}║${colors.reset}`);
   console.log(`${colors.cyan}║${colors.bright}${colors.magenta}${centerText(title, width)}${colors.reset}${colors.cyan}║${colors.reset}`);
   console.log(`${colors.cyan}║${colors.dim}${centerText(subtitle, width)}${colors.reset}${colors.cyan}║${colors.reset}`);
+  console.log(`${colors.cyan}║${empty}║${colors.reset}`);
+  console.log(`${colors.cyan}║${colors.dim}${centerText(author, width)}${colors.reset}${colors.cyan}║${colors.reset}`);
+  console.log(`${colors.cyan}║${colors.dim}${centerText(repo, width)}${colors.reset}${colors.cyan}║${colors.reset}`);
   console.log(`${colors.cyan}║${empty}║${colors.reset}`);
   console.log(`${colors.cyan}╚${line}╝${colors.reset}`);
   console.log('');

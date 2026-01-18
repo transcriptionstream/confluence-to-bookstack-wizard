@@ -2,6 +2,12 @@
   "name": "confluence-to-bookstack-wizard",
   "version": "1.0.0",
   "description": "Interactive terminal wizard for migrating Confluence spaces to BookStack",
+  "author": "Affordable Magic (https://affordablemagic.net)",
+  "homepage": "https://github.com/transcriptionstream/confluence-to-bookstack-wizard",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/transcriptionstream/confluence-to-bookstack-wizard.git"
+  },
   "keywords": ["confluence", "bookstack", "migration", "wiki", "import"],
   "license": "MIT",
   "scripts": {

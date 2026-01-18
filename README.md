@@ -137,6 +137,10 @@ Run the **Upload Attachments** step after importing. Attachments require page ID
 ### Broken Internal Links
 Run **Post-Import Cleanup** to update internal links to their new BookStack URLs.
 
+## Author
+
+Developed by [Affordable Magic](https://affordablemagic.net) | [GitHub](https://github.com/transcriptionstream)
+
 ## Credits
 
 Built upon [confluence-server-to-bookstack-importer](https://github.com/gloverab/confluence-server-to-bookstack-importer) by [@gloverab](https://github.com/gloverab).
