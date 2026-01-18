@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build output
+dist/
+
+# Environment and secrets
+.env
+
+# User data and exports
+html/
+import/
+
+# Generated files
+outputJS/attachmentsFile.js
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code
+.claude/
+
+# Personal planning docs
+CONFLUENCE_TO_GHOST_PLAN.md
+POST_IMPORT_CLEANUP.md
