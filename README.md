@@ -57,7 +57,7 @@ Select **Full Import Workflow** to run a complete migration:
 
 ![Full Import](screenshots/fullimport.png)
 
-1. Choose a Confluence export folder
+1. Choose a Confluence export ZIP file or folder
 2. Import all pages and structure
 3. Upload attachments
 4. Run cleanup scripts
