@@ -2,6 +2,8 @@
 
 An interactive terminal wizard for migrating Confluence spaces to BookStack. Features a full TUI (Terminal User Interface) with guided workflows, progress tracking, and post-import cleanup tools.
 
+![Main Menu](screenshots/mainmenu.png)
+
 ## Features
 
 - **Interactive TUI** - Guided menus instead of memorizing CLI commands
@@ -22,26 +24,10 @@ An interactive terminal wizard for migrating Confluence spaces to BookStack. Fea
 ## Installation
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/confluence-to-bookstack-wizard.git
+git clone https://github.com/transcriptionstream/confluence-to-bookstack-wizard.git
 cd confluence-to-bookstack-wizard
 npm install
 ```
-
-## Configuration
-
-Create a `.env` file in the project root:
-
-```env
-# BookStack API Configuration
-URL=https://your-bookstack-instance.com
-ID=your_api_token_id
-SECRET=your_api_token_secret
-
-# Path to your Confluence exports
-PATH_TO_HTML=/path/to/confluence/exports
-```
-
-You can generate API tokens in BookStack under **Settings > API Tokens**.
 
 ## Usage
 
@@ -51,28 +37,26 @@ Start the wizard:
 npm run setup
 ```
 
-You'll see an interactive menu:
+### First Run - Configuration
 
-```
-┌─────────────────────────────────────────┐
-│     Confluence to BookStack Wizard      │
-└─────────────────────────────────────────┘
+On first run (or if no `.env` file exists), the wizard will guide you through configuration:
 
-  URL: https://your-bookstack.com
-  Path: /path/to/exports
+![Configuration](screenshots/configuration.png)
 
-  Select an option:
-  > Full Import Workflow
-    Import Space
-    Upload Attachments
-    Post-Import Cleanup
-    Delete Shelf
-    Exit
-```
+You'll be prompted to enter:
+- **BookStack URL** - Your BookStack instance URL
+- **API Token ID** - Generate in BookStack under **Settings > API Tokens**
+- **API Token Secret** - The secret for your API token
+- **Export Path** - Path to your Confluence export files
+
+The wizard saves these settings to a `.env` file automatically.
 
 ### Full Import Workflow (Recommended)
 
 Select **Full Import Workflow** to run a complete migration:
+
+![Full Import](screenshots/fullimport.png)
+
 1. Choose a Confluence export folder
 2. Import all pages and structure
 3. Upload attachments
@@ -91,15 +75,21 @@ You can also run steps individually:
 
 ## Export Formats
 
-### HTML Export (Recommended)
-1. In Confluence, go to **Space Settings > Content Tools > Export**
-2. Select **HTML** format
-3. Extract the ZIP to your `PATH_TO_HTML` directory
+Place your Confluence export ZIP files in the `import` folder within the project directory. The wizard will extract them automatically.
 
-### XML Export
+### XML Export (Recommended)
 1. In Confluence, go to **Space Settings > Content Tools > Export**
 2. Select **XML** format
-3. Place the ZIP file in your `PATH_TO_HTML` directory (the wizard will extract it)
+3. Place the ZIP file in the `import` folder
+
+XML exports are faster to process and require less post-import cleanup.
+
+### HTML Export
+1. In Confluence, go to **Space Settings > Content Tools > Export**
+2. Select **HTML** format
+3. Place the ZIP file in the `import` folder
+
+HTML exports work but may require more post-processing to fix links and embedded content.
 
 ## How It Works
 
