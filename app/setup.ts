@@ -501,7 +501,7 @@ const showMainMenu = async (): Promise<string> => {
   return selectFromList('What would you like to do?', [
     { label: '⚙️  Configure', value: 'configure', description: 'Set up BookStack connection & import source' },
     { label: '🚀 Full Import Workflow', value: 'workflow', description: 'Run complete import: space → attachments → cleanup' },
-    { label: '📥 Import Space', value: 'import', description: 'Import Confluence HTML export to BookStack' },
+    { label: '📥 Import Space', value: 'import', description: 'Import Confluence export to BookStack' },
     { label: '📎 Upload Attachments', value: 'attachments', description: 'Upload attachments for imported pages' },
     { label: '🧹 Post-Import Cleanup', value: 'cleanup', description: 'Fix links, images, and remove artifacts' },
     { label: '🗑️  Delete Shelf', value: 'delete', description: 'Remove a shelf and all its contents' },
