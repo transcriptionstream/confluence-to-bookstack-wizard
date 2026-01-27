@@ -12,6 +12,7 @@
   "license": "MIT",
   "scripts": {
     "setup": "npx tsc && node ./dist/setup.js",
+    "web": "npx tsc && node ./dist/server.js",
     "import": "npx tsc && node ./dist/import.js -- import",
     "xml-import": "npx tsc && node ./dist/xml-import.js -- xml-import",
     "sort": "npx tsc && node ./dist/import.js -- sort",

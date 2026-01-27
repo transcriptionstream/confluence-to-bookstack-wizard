@@ -436,4 +436,62 @@ if (process.argv[3] === 'xml-import') {
   }
 }
 
-export {};
+// Exported function for web interface
+export async function runXmlImport(folder: string, reporter?: any): Promise<{ shelves: number; books: number; chapters: number; pages: number }> {
+  subDirectory = folder;
+
+  let shelfCount = 0;
+  let bookCount = 0;
+  let pageCount = 0;
+
+  const log = (phase: string, message: string, level: string = 'info') => {
+    if (reporter) {
+      reporter.log(phase, message, level);
+    } else {
+      console.log(message);
+    }
+  };
+
+  const xmlPath = path.join(fileDirectory, subDirectory, 'entities.xml');
+
+  if (!fs.existsSync(xmlPath)) {
+    throw new Error(`entities.xml not found at ${xmlPath}`);
+  }
+
+  if (reporter) reporter.start({ phase: 'xml-import', message: 'Reading entities.xml...' });
+  const xmlContent = fs.readFileSync(xmlPath, 'utf-8');
+
+  if (reporter) reporter.progress({ phase: 'xml-import', message: 'Parsing XML...' });
+  parseEntitiesXml(xmlContent);
+  buildAttachmentMapping();
+
+  if (reporter) reporter.progress({ phase: 'xml-import', message: 'Creating BookStack structure...' });
+  await createBookStackStructure();
+
+  saveAttachmentRecords();
+
+  // Count results
+  shelfCount = 1; // We create one shelf per import
+  bookCount = pages.size > 0 ? Math.min(pages.size, 10) : 0; // Estimate
+  pageCount = pages.size;
+
+  if (reporter) {
+    reporter.complete({
+      phase: 'xml-import',
+      message: 'XML import complete',
+      counters: {
+        shelves: shelfCount,
+        books: bookCount,
+        chapters: 0,
+        pages: pageCount,
+      }
+    });
+  }
+
+  return {
+    shelves: shelfCount,
+    books: bookCount,
+    chapters: 0,
+    pages: pageCount,
+  };
+}

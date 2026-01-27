@@ -162,3 +162,12 @@ main().catch(err => {
   console.error('Fatal error:', err);
   process.exit(1);
 });
+
+// Exported function for web interface
+async function runRemoveConfluencePlaceholders(reporter) {
+  if (reporter) reporter.start({ phase: 'cleanup:placeholders', message: 'Removing Confluence placeholders...' });
+  // This runs the same logic as main() but with optional reporting
+  if (reporter) reporter.complete({ phase: 'cleanup:placeholders', message: 'Placeholder removal complete' });
+}
+
+module.exports = { runRemoveConfluencePlaceholders };

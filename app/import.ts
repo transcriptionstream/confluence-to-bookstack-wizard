@@ -883,3 +883,75 @@ if (process.argv[3] === 'attachments') {
 if (process.argv[3] === 'fixLinks') {
   fixLinks()
 }
+
+// Exported function for web interface
+export async function runImport(folder: string, reporter?: any): Promise<{ shelves: number; books: number; chapters: number; pages: number }> {
+  subDirectory = folder;
+
+  const log = (phase: string, message: string, level: string = 'info') => {
+    if (reporter) {
+      reporter.log(phase, message, level);
+    } else {
+      console.log(message);
+    }
+  };
+
+  return new Promise((resolve) => {
+    if (reporter) {
+      reporter.start({ phase: 'import', message: 'Sorting files...' });
+    }
+    sortFiles();
+    log('import', 'Files sorted', 'success');
+
+    const runImportSteps = async () => {
+      if (reporter) reporter.progress({ phase: 'import', message: 'Creating shelves...' });
+      await createShelves();
+      log('import', `Created ${shelves.length} shelves`, 'success');
+
+      if (reporter) reporter.progress({ phase: 'import', message: 'Creating books...' });
+      await createBooks();
+      log('import', `Created ${bookCreatedCount} books`, 'success');
+
+      if (reporter) reporter.progress({ phase: 'import', message: 'Putting books on shelves...' });
+      await putBooksOnShelves();
+      log('import', 'Books placed on shelves', 'success');
+
+      if (reporter) reporter.progress({ phase: 'import', message: 'Creating chapters...' });
+      await createChapters();
+      log('import', `Created ${chapterCreatedCount} chapters`, 'success');
+
+      if (reporter) reporter.progress({ phase: 'import', message: 'Creating standalone pages...' });
+      await createPages(sortedFiles.pagesBelongBook);
+      log('import', 'Standalone pages created', 'success');
+
+      if (reporter) reporter.progress({ phase: 'import', message: 'Creating pages in chapters...' });
+      await createPages(sortedFiles.pagesBelongChapter);
+      log('import', 'Chapter pages created', 'success');
+
+      await handleRetry();
+      handleAttachments();
+
+      if (reporter) {
+        reporter.complete({
+          phase: 'import',
+          message: 'Import complete',
+          counters: {
+            shelves: shelves.length,
+            books: bookCreatedCount,
+            chapters: chapterCreatedCount,
+            pages: pageCreatedCount,
+          }
+        });
+      }
+
+      resolve({
+        shelves: shelves.length,
+        books: bookCreatedCount,
+        chapters: chapterCreatedCount,
+        pages: pageCreatedCount,
+      });
+    };
+
+    setTimeout(runImportSteps, 1000);
+  });
+}

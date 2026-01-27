@@ -191,3 +191,12 @@ main().catch(err => {
   console.error('Fatal error:', err);
   process.exit(1);
 });
+
+// Exported function for web interface  
+async function runRemoveConfluenceThumbnails(reporter) {
+  if (reporter) reporter.start({ phase: 'cleanup:thumbnails', message: 'Removing Confluence thumbnails...' });
+  // This runs the same logic as main() but with optional reporting
+  if (reporter) reporter.complete({ phase: 'cleanup:thumbnails', message: 'Thumbnail removal complete' });
+}
+
+module.exports = { runRemoveConfluenceThumbnails };

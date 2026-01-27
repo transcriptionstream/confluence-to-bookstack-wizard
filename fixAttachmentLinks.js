@@ -1,6 +1,6 @@
 require('dotenv').config();
 const Axios = require('axios');
-const { attachmentRecords } = require('./outputJS/attachmentsFile');
+const path = require('path');
 
 const credentials = {
   url: process.env.URL,
@@ -18,12 +18,20 @@ const client = Axios.create({
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Dynamic loader for attachment records (avoids Node.js module caching issues)
+function loadAttachmentRecords() {
+  const filePath = path.resolve(__dirname, './outputJS/attachmentsFile.js');
+  // Clear the require cache to get fresh data
+  delete require.cache[require.resolve(filePath)];
+  const { attachmentRecords } = require(filePath);
+  return attachmentRecords;
+}
+
 // Rate limiting configuration
-const BASE_DELAY = 300; // Base delay between requests (ms)
+const BASE_DELAY = 300;
 const MAX_RETRIES = 5;
 const BACKOFF_MULTIPLIER = 2;
 
-// Wrapper for API calls with retry logic for 429 errors
 async function withRetry(fn, context = '') {
   let lastError;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -37,15 +45,15 @@ async function withRetry(fn, context = '') {
         console.log(`\x1b[33m Rate limited${context ? ` (${context})` : ''}, waiting ${delay}ms (attempt ${attempt}/${MAX_RETRIES}) \x1b[0m`);
         await sleep(delay);
       } else {
-        throw err; // Re-throw non-429 errors immediately
+        throw err;
       }
     }
   }
-  throw lastError; // Throw after all retries exhausted
+  throw lastError;
 }
 
-// Build mapping from old confluence paths to attachment info
 function buildPathMapping(subDirectory) {
+  const attachmentRecords = loadAttachmentRecords();
   const pathMap = {};
   const records = attachmentRecords[subDirectory];
 
@@ -57,8 +65,6 @@ function buildPathMapping(subDirectory) {
   for (const [oldPageId, data] of Object.entries(records)) {
     const pageNewId = data.pageNewId;
     for (const att of data.attachmentHrefs) {
-      // att.href is like "attachments/2392066/2392067.pdf"
-      // att.name is like "ACCESS TO SCORING.pdf"
       pathMap[att.href] = {
         name: att.name,
         pageNewId: pageNewId
@@ -133,7 +139,6 @@ async function updatePageHtml(pageId, html, name, bookId) {
 }
 
 function buildAttachmentLookup(attachments) {
-  // Create lookup by (uploaded_to, name) -> attachment_id
   const lookup = {};
   for (const att of attachments) {
     const key = `${att.uploaded_to}:${att.name.toLowerCase()}`;
@@ -147,14 +152,15 @@ function fixAttachmentLinksInHtml(html, pathMap, attachmentLookup) {
   let replacements = 0;
   let notFound = [];
 
-  // Find all old-style attachment links
+  // Match old-style attachment links: href="attachments/..."
   const attachmentLinkRegex = /href=["'](attachments\/\d+\/[^"']+)["']/gi;
 
-  updatedHtml = html.replace(attachmentLinkRegex, (match, oldPath) => {
-    // Decode URL-encoded characters in the path
-    const decodedPath = decodeURIComponent(oldPath);
+  // Also match placeholder format: href="[ATTACHMENT:filename]" or URL-encoded versions
+  const placeholderRegex = /href=["'](?:\[|%5[Bb])ATTACHMENT:([^\]"']+?)(?:\]|%5[Dd])["']/gi;
 
-    // Look up in our path mapping
+  // Fix old-style attachment paths
+  updatedHtml = html.replace(attachmentLinkRegex, (match, oldPath) => {
+    const decodedPath = decodeURIComponent(oldPath);
     const mappingInfo = pathMap[oldPath] || pathMap[decodedPath];
 
     if (mappingInfo) {
@@ -172,7 +178,24 @@ function fixAttachmentLinksInHtml(html, pathMap, attachmentLookup) {
       notFound.push({ path: oldPath, reason: 'no mapping found' });
     }
 
-    return match; // No match found, keep original
+    return match;
+  });
+
+  // Fix placeholder-style attachment links
+  updatedHtml = updatedHtml.replace(placeholderRegex, (match, filename) => {
+    const decodedFilename = decodeURIComponent(filename);
+
+    // Search for this filename in the attachment lookup
+    for (const [key, attachmentId] of Object.entries(attachmentLookup)) {
+      const [pageId, attName] = key.split(':');
+      if (attName === decodedFilename.toLowerCase() || attName === filename.toLowerCase()) {
+        replacements++;
+        return `href="/attachments/${attachmentId}"`;
+      }
+    }
+
+    notFound.push({ path: filename, reason: 'placeholder not matched' });
+    return match;
   });
 
   return { updatedHtml, replacements, notFound };
@@ -182,7 +205,6 @@ async function main() {
   const subDirectory = process.argv[2] || 'IT';
   console.log(`Starting attachment link fix for ${subDirectory}...\n`);
 
-  // Build the path mapping from import records
   const pathMap = buildPathMapping(subDirectory);
 
   if (Object.keys(pathMap).length === 0) {
@@ -190,11 +212,9 @@ async function main() {
     return;
   }
 
-  // Get all attachments and build lookup
   const attachments = await getAllAttachments();
   const attachmentLookup = buildAttachmentLookup(attachments);
 
-  // Get all pages
   const pages = await getAllPages();
 
   let totalReplacements = 0;
@@ -206,24 +226,20 @@ async function main() {
     pagesChecked++;
 
     try {
-      // Get page details (includes HTML)
       const pageDetails = await getPageDetails(page.id);
       const html = pageDetails.html || '';
 
-      // Check if page has old attachment links
-      if (!html.includes('attachments/')) {
+      if (!html.includes('attachments/') && !html.includes('ATTACHMENT:')) {
         if (pagesChecked % 50 === 0) {
           console.log(`[${pagesChecked}/${pages.length}] Checking...`);
         }
         continue;
       }
 
-      // Fix the links
       const { updatedHtml, replacements, notFound } = fixAttachmentLinksInHtml(html, pathMap, attachmentLookup);
       allNotFound = allNotFound.concat(notFound);
 
       if (replacements > 0 && updatedHtml !== html) {
-        // Update the page
         await updatePageHtml(page.id, updatedHtml, pageDetails.name, pageDetails.book_id);
         totalReplacements += replacements;
         pagesUpdated++;
@@ -232,7 +248,7 @@ async function main() {
         console.log(`\x1b[33m [${pagesChecked}/${pages.length}] "${page.name}": ${notFound.length} links not matched \x1b[0m`);
       }
 
-      await sleep(BASE_DELAY); // Rate limiting
+      await sleep(BASE_DELAY);
 
     } catch (err) {
       const status = err.response?.status || '';
@@ -247,7 +263,6 @@ async function main() {
 
   if (allNotFound.length > 0) {
     console.log(`\x1b[33m Links not matched: ${allNotFound.length} \x1b[0m`);
-    // Show first few unmatched for debugging
     console.log('\nSample unmatched links:');
     allNotFound.slice(0, 10).forEach(nf => {
       console.log(`  - ${nf.path}: ${nf.reason}`);
@@ -255,7 +270,75 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+// Exported function for web interface
+async function runFixAttachmentLinks(subDirectory, reporter) {
+  if (reporter) reporter.start({ phase: 'cleanup:links', message: 'Fixing attachment links...' });
+
+  const pathMap = buildPathMapping(subDirectory);
+
+  if (Object.keys(pathMap).length === 0) {
+    if (reporter) reporter.warning({ phase: 'cleanup:links', message: 'No path mappings found' });
+    return { fixed: 0, pages: 0 };
+  }
+
+  const attachments = await getAllAttachments();
+  const attachmentLookup = buildAttachmentLookup(attachments);
+  const pages = await getAllPages();
+
+  let totalReplacements = 0;
+  let pagesUpdated = 0;
+
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i];
+
+    try {
+      const pageDetails = await getPageDetails(page.id);
+      const html = pageDetails.html || '';
+
+      if (!html.includes('attachments/') && !html.includes('ATTACHMENT:')) {
+        continue;
+      }
+
+      const { updatedHtml, replacements } = fixAttachmentLinksInHtml(html, pathMap, attachmentLookup);
+
+      if (replacements > 0 && updatedHtml !== html) {
+        await updatePageHtml(page.id, updatedHtml, pageDetails.name, pageDetails.book_id);
+        totalReplacements += replacements;
+        pagesUpdated++;
+
+        if (reporter) {
+          reporter.progress({
+            phase: 'cleanup:links',
+            message: `Fixed ${replacements} links in "${page.name}"`,
+            current: i + 1,
+            total: pages.length
+          });
+        }
+      }
+
+      await sleep(BASE_DELAY);
+    } catch (err) {
+      if (reporter) reporter.warning({ phase: 'cleanup:links', message: `Error on "${page.name}": ${err.message}` });
+    }
+  }
+
+  if (reporter) {
+    reporter.complete({
+      phase: 'cleanup:links',
+      message: `Fixed ${totalReplacements} attachment links in ${pagesUpdated} pages`
+    });
+  }
+
+  return { fixed: totalReplacements, pages: pagesUpdated };
+}
+
+// Export for web interface
+module.exports = { runFixAttachmentLinks };
+
+// CLI execution
+if (require.main === module) {
+  main().catch(err => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
+}

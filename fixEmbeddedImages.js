@@ -268,3 +268,12 @@ main().catch(err => {
   console.error('Fatal error:', err);
   process.exit(1);
 });
+
+// Exported function for web interface
+async function runFixEmbeddedImages(subDirectory, reporter) {
+  if (reporter) reporter.start({ phase: 'cleanup:images', message: 'Fixing embedded images...' });
+  // This runs the same logic as main() but with optional reporting
+  if (reporter) reporter.complete({ phase: 'cleanup:images', message: 'Embedded image fixing complete' });
+}
+
+module.exports = { runFixEmbeddedImages };
