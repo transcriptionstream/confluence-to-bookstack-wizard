@@ -1,7 +1,6 @@
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as url from 'url';
 import { createSSEReporter, ProgressReporter } from './progress';
 import { jobManager } from './job-manager';
 import { runImport } from './import';
@@ -15,6 +14,9 @@ const PORT = parseInt(process.env.WEB_PORT || '3456', 10);
 
 // Store active SSE connections for each job
 const sseConnections: Map<string, http.ServerResponse[]> = new Map();
+
+// Store pending jobs waiting for SSE connection
+const pendingJobs: Map<string, { folder: string; exportType: string; reporter: any }> = new Map();
 
 // MIME types for static file serving
 const mimeTypes: Record<string, string> = {
@@ -110,9 +112,75 @@ async function testConnection(config: { url: string; id: string; secret: string 
   }
 }
 
+// Helper to detect export type in a folder
+function detectExportInFolder(folderPath: string): { exportType: 'html' | 'xml' | 'unknown'; pageCount: number; spaceName?: string; subFolder?: string } {
+  const files = fs.readdirSync(folderPath);
+
+  // Check for direct exports
+  if (files.includes('entities.xml')) {
+    let pageCount = 0;
+    let spaceName: string | undefined;
+    try {
+      const xmlContent = fs.readFileSync(path.join(folderPath, 'entities.xml'), 'utf-8');
+      const pageMatches = xmlContent.match(/<object class="Page"/g);
+      pageCount = pageMatches ? pageMatches.length : 0;
+      const spaceMatch = xmlContent.match(/<object class="Space"[^>]*>[\s\S]*?<property name="name"><!\[CDATA\[([^\]]+)\]\]><\/property>/);
+      if (spaceMatch) spaceName = spaceMatch[1];
+    } catch {}
+    return { exportType: 'xml', pageCount, spaceName };
+  }
+
+  if (files.includes('index.html')) {
+    let spaceName: string | undefined;
+    const pageCount = files.filter(f => f.endsWith('.html') && f !== 'index.html').length;
+    try {
+      const indexContent = fs.readFileSync(path.join(folderPath, 'index.html'), 'utf-8');
+      const titleMatch = indexContent.match(/<title>([^<]+)<\/title>/i);
+      if (titleMatch) spaceName = titleMatch[1].replace(/^Home\s*-\s*/i, '').trim();
+    } catch {}
+    return { exportType: 'html', pageCount, spaceName };
+  }
+
+  // Check one level deeper for nested exports (common with some ZIP structures)
+  for (const file of files) {
+    const subPath = path.join(folderPath, file);
+    try {
+      if (fs.statSync(subPath).isDirectory() && !file.startsWith('.')) {
+        const subFiles = fs.readdirSync(subPath);
+
+        if (subFiles.includes('entities.xml')) {
+          let pageCount = 0;
+          let spaceName: string | undefined;
+          try {
+            const xmlContent = fs.readFileSync(path.join(subPath, 'entities.xml'), 'utf-8');
+            const pageMatches = xmlContent.match(/<object class="Page"/g);
+            pageCount = pageMatches ? pageMatches.length : 0;
+            const spaceMatch = xmlContent.match(/<object class="Space"[^>]*>[\s\S]*?<property name="name"><!\[CDATA\[([^\]]+)\]\]><\/property>/);
+            if (spaceMatch) spaceName = spaceMatch[1];
+          } catch {}
+          return { exportType: 'xml', pageCount, spaceName, subFolder: file };
+        }
+
+        if (subFiles.includes('index.html')) {
+          let spaceName: string | undefined;
+          const pageCount = subFiles.filter(f => f.endsWith('.html') && f !== 'index.html').length;
+          try {
+            const indexContent = fs.readFileSync(path.join(subPath, 'index.html'), 'utf-8');
+            const titleMatch = indexContent.match(/<title>([^<]+)<\/title>/i);
+            if (titleMatch) spaceName = titleMatch[1].replace(/^Home\s*-\s*/i, '').trim();
+          } catch {}
+          return { exportType: 'html', pageCount, spaceName, subFolder: file };
+        }
+      }
+    } catch {}
+  }
+
+  return { exportType: 'unknown', pageCount: 0 };
+}
+
 // Get list of available exports
-function getExports(importPath: string): Array<{ name: string; type: string; exportType: string; size?: string; pageCount?: number; spaceName?: string }> {
-  const exports: Array<{ name: string; type: string; exportType: string; size?: string; pageCount?: number; spaceName?: string }> = [];
+function getExports(importPath: string): Array<{ name: string; type: string; exportType: string; size?: string; pageCount?: number; spaceName?: string; subFolder?: string }> {
+  const exports: Array<{ name: string; type: string; exportType: string; size?: string; pageCount?: number; spaceName?: string; subFolder?: string }> = [];
 
   if (!fs.existsSync(importPath)) {
     return exports;
@@ -131,44 +199,16 @@ function getExports(importPath: string): Array<{ name: string; type: string; exp
       });
     } else if (entry.isDirectory() && !entry.name.startsWith('.')) {
       const folderPath = path.join(importPath, entry.name);
-      const files = fs.readdirSync(folderPath);
+      const detected = detectExportInFolder(folderPath);
 
-      let exportType: 'html' | 'xml' | 'unknown' = 'unknown';
-      let pageCount = 0;
-      let spaceName: string | undefined;
-
-      if (files.includes('entities.xml')) {
-        exportType = 'xml';
-        try {
-          const xmlContent = fs.readFileSync(path.join(folderPath, 'entities.xml'), 'utf-8');
-          const pageMatches = xmlContent.match(/<object class="Page"/g);
-          pageCount = pageMatches ? pageMatches.length : 0;
-
-          const spaceMatch = xmlContent.match(/<object class="Space"[^>]*>[\s\S]*?<property name="name"><!\[CDATA\[([^\]]+)\]\]><\/property>/);
-          if (spaceMatch) {
-            spaceName = spaceMatch[1];
-          }
-        } catch {}
-      } else if (files.includes('index.html')) {
-        exportType = 'html';
-        pageCount = files.filter(f => f.endsWith('.html') && f !== 'index.html').length;
-
-        try {
-          const indexContent = fs.readFileSync(path.join(folderPath, 'index.html'), 'utf-8');
-          const titleMatch = indexContent.match(/<title>([^<]+)<\/title>/i);
-          if (titleMatch) {
-            spaceName = titleMatch[1].replace(/^Home\s*-\s*/i, '').trim();
-          }
-        } catch {}
-      }
-
-      if (exportType !== 'unknown') {
+      if (detected.exportType !== 'unknown') {
         exports.push({
           name: entry.name,
           type: 'folder',
-          exportType,
-          pageCount,
-          spaceName,
+          exportType: detected.exportType,
+          pageCount: detected.pageCount,
+          spaceName: detected.spaceName,
+          subFolder: detected.subFolder,
         });
       }
     }
@@ -500,7 +540,8 @@ async function runImportJob(jobId: string, folder: string, exportType: string, r
     }
 
     // Run attachments
-    reporter.start({ phase: 'attachments', message: 'Starting attachment upload' });
+    reporter.start({ phase: 'attachments', message: 'Starting attachment upload...' });
+    reporter.log('attachments', 'Scanning for attachments to upload...', 'info');
     const attachResult = await runAttachments(folder, reporter);
 
     // Run cleanup scripts
@@ -509,23 +550,76 @@ async function runImportJob(jobId: string, folder: string, exportType: string, r
     const { runRemoveConfluencePlaceholders } = require('../removeConfluencePlaceholders.js');
     const { runRemoveConfluenceThumbnails } = require('../removeConfluenceThumbnails.js');
 
-    reporter.start({ phase: 'cleanup', message: 'Running cleanup scripts' });
+    reporter.start({ phase: 'cleanup', message: 'Running cleanup scripts...' });
+    reporter.log('cleanup', 'Starting post-import cleanup...', 'info');
 
-    await runFixAttachmentLinks(folder, reporter);
-    await runRemoveConfluenceThumbnails(reporter);
-    await runRemoveConfluencePlaceholders(reporter);
-    await runFixEmbeddedImages(folder, reporter);
+    try {
+      reporter.log('cleanup', 'Fixing attachment links...', 'info');
+      await runFixAttachmentLinks(folder, reporter);
+      reporter.log('cleanup', '✓ Attachment links fixed', 'success');
+    } catch (err: any) {
+      reporter.log('cleanup', `⚠ Attachment link fixing failed: ${err.message}`, 'warning');
+      console.error('Attachment link fix error:', err);
+    }
+
+    try {
+      reporter.log('cleanup', 'Removing Confluence thumbnails...', 'info');
+      await runRemoveConfluenceThumbnails(reporter);
+      reporter.log('cleanup', '✓ Confluence thumbnails removed', 'success');
+    } catch (err: any) {
+      reporter.log('cleanup', `⚠ Thumbnail removal failed: ${err.message}`, 'warning');
+      console.error('Thumbnail removal error:', err);
+    }
+
+    try {
+      reporter.log('cleanup', 'Removing Confluence placeholders...', 'info');
+      await runRemoveConfluencePlaceholders(reporter);
+      reporter.log('cleanup', '✓ Confluence placeholders removed', 'success');
+    } catch (err: any) {
+      reporter.log('cleanup', `⚠ Placeholder removal failed: ${err.message}`, 'warning');
+      console.error('Placeholder removal error:', err);
+    }
+
+    try {
+      reporter.log('cleanup', 'Fixing embedded images...', 'info');
+      await runFixEmbeddedImages(folder, reporter);
+      reporter.log('cleanup', '✓ Embedded images fixed', 'success');
+    } catch (err: any) {
+      reporter.log('cleanup', `⚠ Embedded image fixing failed: ${err.message}`, 'warning');
+      console.error('Embedded image fix error:', err);
+    }
+
+    // Clear all attachment records now that import is complete
+    clearAttachmentRecords();
+    reporter.log('cleanup', '✓ Attachment records cleared', 'success');
+
+    reporter.complete({ phase: 'cleanup', message: 'Import completed successfully!' });
 
     jobManager.completeJob(jobId, { ...result, attachments: attachResult });
   } catch (err: any) {
+    console.error('Import job error:', err);
+    reporter.error({ phase: 'import', message: `Import failed: ${err.message}` });
     jobManager.failJob(jobId, err.message);
   }
 }
+
+// Clear attachment records file
+function clearAttachmentRecords(): void {
+  const filePath = path.join(process.cwd(), 'outputJS', 'attachmentsFile.js');
+  const emptyContent = `module.exports = {
+    attachmentRecords: {}
+  };`;
+  fs.writeFileSync(filePath, emptyContent);
+  console.log('Cleared attachment records file');
+}
+
 
 // Handle API requests
 async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, pathname: string): Promise<void> {
   const method = req.method || 'GET';
   const config = readEnvConfig();
+
+  console.log(`[API] ${method} ${pathname}`);
 
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -582,6 +676,39 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, pa
       };
       const result = await testConnection(testConfig);
       sendJson(res, result);
+    } catch (err: any) {
+      sendJson(res, { success: false, error: err.message }, 500);
+    }
+    return;
+  }
+
+  // GET /api/attachments - Get attachment records info
+  if (pathname === '/api/attachments' && method === 'GET') {
+    try {
+      const filePath = path.join(process.cwd(), 'outputJS', 'attachmentsFile.js');
+      delete require.cache[require.resolve(filePath)];
+      const { attachmentRecords } = require(filePath);
+      const folders = Object.keys(attachmentRecords);
+      const stats = folders.map(folder => {
+        const pages = Object.keys(attachmentRecords[folder]).length;
+        let attachments = 0;
+        for (const pageData of Object.values(attachmentRecords[folder]) as any[]) {
+          attachments += pageData.attachmentHrefs?.length || 0;
+        }
+        return { folder, pages, attachments };
+      });
+      sendJson(res, { folders: stats, totalFolders: folders.length });
+    } catch (err: any) {
+      sendJson(res, { folders: [], totalFolders: 0 });
+    }
+    return;
+  }
+
+  // DELETE /api/attachments - Clear all attachment records
+  if (pathname === '/api/attachments' && method === 'DELETE') {
+    try {
+      clearAttachmentRecords();
+      sendJson(res, { success: true, message: 'Attachment records cleared' });
     } catch (err: any) {
       sendJson(res, { success: false, error: err.message }, 500);
     }
@@ -661,6 +788,91 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, pa
     return;
   }
 
+  // POST /api/upload - Upload a ZIP file
+  if (pathname === '/api/upload' && method === 'POST') {
+    const importPath = ensureImportDirectory();
+    const contentType = req.headers['content-type'] || '';
+
+    if (!contentType.includes('multipart/form-data')) {
+      sendJson(res, { error: 'Content-Type must be multipart/form-data' }, 400);
+      return;
+    }
+
+    // Parse boundary from content-type
+    const boundaryMatch = contentType.match(/boundary=(.+)$/);
+    if (!boundaryMatch) {
+      sendJson(res, { error: 'No boundary in Content-Type' }, 400);
+      return;
+    }
+    const boundary = boundaryMatch[1];
+
+    // Collect request body
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      try {
+        const body = Buffer.concat(chunks);
+        const boundaryBuffer = Buffer.from(`--${boundary}`);
+
+        // Find the file data between boundaries
+        let start = body.indexOf(boundaryBuffer) + boundaryBuffer.length;
+        let end = body.indexOf(boundaryBuffer, start);
+
+        if (start === -1 || end === -1) {
+          sendJson(res, { error: 'Invalid multipart data' }, 400);
+          return;
+        }
+
+        const part = body.slice(start, end);
+
+        // Parse headers from the part
+        const headerEnd = part.indexOf('\r\n\r\n');
+        if (headerEnd === -1) {
+          sendJson(res, { error: 'Invalid part headers' }, 400);
+          return;
+        }
+
+        const headers = part.slice(0, headerEnd).toString();
+        const fileData = part.slice(headerEnd + 4, part.length - 2); // Remove trailing \r\n
+
+        // Extract filename from Content-Disposition
+        const filenameMatch = headers.match(/filename="([^"]+)"/);
+        if (!filenameMatch) {
+          sendJson(res, { error: 'No filename in upload' }, 400);
+          return;
+        }
+
+        let filename = filenameMatch[1];
+
+        // Sanitize filename
+        filename = path.basename(filename);
+
+        // Ensure it's a ZIP file
+        if (!filename.toLowerCase().endsWith('.zip')) {
+          sendJson(res, { error: 'Only ZIP files are allowed' }, 400);
+          return;
+        }
+
+        // Save the file
+        const filePath = path.join(importPath, filename);
+        fs.writeFileSync(filePath, fileData);
+
+        console.log(`Uploaded file: ${filename} (${fileData.length} bytes)`);
+        sendJson(res, {
+          success: true,
+          filename,
+          size: fileData.length,
+          path: filePath
+        });
+      } catch (err: any) {
+        console.error('Upload error:', err);
+        sendJson(res, { error: err.message }, 500);
+      }
+    });
+
+    return;
+  }
+
   // POST /api/import/:folder
   const importMatch = pathname.match(/^\/api\/import\/(.+)$/);
   if (importMatch && method === 'POST') {
@@ -672,6 +884,12 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, pa
     const folder = decodeURIComponent(importMatch[1]);
     const body = await parseBody(req);
     const exportType = body.exportType || 'html';
+    const subFolder = body.subFolder || '';
+
+    console.log(`[Import] Request received - folder: ${folder}, exportType: ${exportType}, subFolder: ${subFolder}`);
+
+    // Combine folder and subFolder for actual import path
+    const importFolder = subFolder ? `${folder}/${subFolder}` : folder;
 
     const currentJob = jobManager.getCurrentJob();
     if (currentJob) {
@@ -679,24 +897,38 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, pa
       return;
     }
 
-    const job = jobManager.createJob(exportType === 'xml' ? 'xml-import' : 'import', folder);
+    // Clear all attachment records before starting import
+    clearAttachmentRecords();
+
+    const job = jobManager.createJob(exportType === 'xml' ? 'xml-import' : 'import', importFolder);
     sendJson(res, { jobId: job.id, status: 'pending' });
 
-    const reporter = createSSEReporter(res, job.id);
+    // Create a reporter that broadcasts to SSE connections
+    const reporter = new ProgressReporter();
 
-    const originalEmit = reporter.emit.bind(reporter);
-    reporter.emit = (event: string, data: any): boolean => {
+    // Helper to send SSE to all connections for this job
+    const sendToConnections = (event: string, data: any) => {
       const connections = sseConnections.get(job.id) || [];
+      console.log(`[SSE] Sending ${event} to ${connections.length} connections`);
       for (const conn of connections) {
         if (!conn.writableEnded) {
           conn.write(`event: ${event}\n`);
           conn.write(`data: ${JSON.stringify({ ...data, jobId: job.id, timestamp: Date.now() })}\n\n`);
         }
       }
-      return originalEmit(event, data);
     };
 
-    setImmediate(() => runImportJob(job.id, folder, exportType, reporter));
+    // Listen to all reporter events and forward to SSE
+    reporter.on('start', (data: any) => sendToConnections('start', data));
+    reporter.on('progress', (data: any) => sendToConnections('progress', data));
+    reporter.on('success', (data: any) => sendToConnections('success', data));
+    reporter.on('error', (data: any) => sendToConnections('error', data));
+    reporter.on('warning', (data: any) => sendToConnections('warning', data));
+    reporter.on('complete', (data: any) => sendToConnections('complete', data));
+    reporter.on('log', (data: any) => sendToConnections('log', data));
+
+    // Store pending job - will start when SSE connection is established
+    pendingJobs.set(job.id, { folder: importFolder, exportType, reporter });
 
     return;
   }
@@ -725,6 +957,13 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, pa
       sseConnections.set(jobId, []);
     }
     sseConnections.get(jobId)!.push(res);
+
+    // Start pending job now that SSE connection is established
+    const pendingJob = pendingJobs.get(jobId);
+    if (pendingJob) {
+      pendingJobs.delete(jobId);
+      setImmediate(() => runImportJob(jobId, pendingJob.folder, pendingJob.exportType, pendingJob.reporter));
+    }
 
     req.on('close', () => {
       const connections = sseConnections.get(jobId);
@@ -864,10 +1103,23 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, pa
   sendJson(res, { error: 'Not found' }, 404);
 }
 
+// Ensure import directory exists
+function ensureImportDirectory(): string {
+  const importPath = path.join(process.cwd(), 'import');
+  if (!fs.existsSync(importPath)) {
+    fs.mkdirSync(importPath, { recursive: true });
+    console.log('Created import directory:', importPath);
+  }
+  return importPath;
+}
+
+// Initialize import directory on startup
+ensureImportDirectory();
+
 // Main request handler
 const server = http.createServer(async (req, res) => {
-  const parsedUrl = url.parse(req.url || '/');
-  const pathname = parsedUrl.pathname || '/';
+  const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  const pathname = parsedUrl.pathname;
 
   try {
     if (pathname.startsWith('/api/')) {

@@ -178,6 +178,11 @@ export async function runAttachments(folder: string, reporter?: any): Promise<{ 
 
   for (let i = 0; i < uploadParamCollection.length; i++) {
     const params = uploadParamCollection[i];
+
+    if (reporter) {
+      reporter.log('attachments', `Uploading ${i + 1}/${uploadParamCollection.length}: ${params.name}`, 'info');
+    }
+
     try {
       const fileStream = fs.createReadStream(params.filePath);
       await axios.createAttachment({
@@ -187,10 +192,11 @@ export async function runAttachments(folder: string, reporter?: any): Promise<{ 
       });
       successCount++;
 
-      if (reporter && (i % 10 === 0 || i === uploadParamCollection.length - 1)) {
+      if (reporter) {
+        reporter.log('attachments', `✓ Uploaded: ${params.name}`, 'success');
         reporter.progress({
           phase: 'attachments',
-          message: `Uploaded ${params.name}`,
+          message: `Uploaded ${successCount} of ${uploadParamCollection.length} attachments`,
           current: i + 1,
           total: uploadParamCollection.length
         });
@@ -200,7 +206,9 @@ export async function runAttachments(folder: string, reporter?: any): Promise<{ 
     } catch (err: any) {
       errorCount++;
       const errMsg = err.response?.data?.error?.message || err.message || 'Unknown error';
-      if (reporter) reporter.warning({ phase: 'attachments', message: `Failed: ${params.name} - ${errMsg}` });
+      if (reporter) {
+        reporter.log('attachments', `✗ Failed: ${params.name} - ${errMsg}`, 'error');
+      }
       notAttached.push({ name: params.name, error: errMsg });
     }
   }

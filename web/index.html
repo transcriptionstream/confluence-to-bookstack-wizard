@@ -2,213 +2,422 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Confluence to BookStack Wizard</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1419">
+  <title>Confluence → BookStack Migration</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest"></script>
   <link rel="stylesheet" href="style.css">
 </head>
-<body class="bg-gray-100 min-h-screen">
-  <div class="container mx-auto px-4 py-8 max-w-4xl">
+<body>
+  <!-- Background Pattern -->
+  <div class="bg-pattern"></div>
+
+  <!-- Toast Container -->
+  <div id="toast-container"></div>
+
+  <div class="app-container">
     <!-- Header -->
-    <header class="text-center mb-8">
-      <h1 class="text-3xl font-bold text-gray-800 mb-2">Confluence to BookStack Wizard</h1>
-      <p class="text-gray-600">Import your Confluence spaces into BookStack</p>
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="brand-icon">
+          <i data-lucide="arrow-right-left"></i>
+        </div>
+        <div class="brand-text">
+          <h1>Confluence <span class="arrow">→</span> BookStack</h1>
+          <p class="tagline">Documentation Migration Wizard</p>
+        </div>
+      </div>
+      <div class="header-status" id="connection-indicator">
+        <span class="status-dot"></span>
+        <span class="status-text">Not Connected</span>
+      </div>
     </header>
 
-    <!-- Step Indicator -->
-    <div class="flex justify-center mb-8">
-      <div class="flex items-center space-x-4">
-        <div class="step-indicator" data-step="1">
-          <div class="step-circle">1</div>
-          <span class="step-label">Configure</span>
-        </div>
-        <div class="step-line"></div>
-        <div class="step-indicator" data-step="2">
-          <div class="step-circle">2</div>
-          <span class="step-label">Select Export</span>
-        </div>
-        <div class="step-line"></div>
-        <div class="step-indicator" data-step="3">
-          <div class="step-circle">3</div>
-          <span class="step-label">Import</span>
-        </div>
-        <div class="step-line"></div>
-        <div class="step-indicator" data-step="4">
-          <div class="step-circle">4</div>
-          <span class="step-label">Complete</span>
-        </div>
+    <!-- Progress Pipeline -->
+    <nav class="progress-pipeline">
+      <div class="pipeline-track">
+        <div class="pipeline-fill" id="pipeline-fill"></div>
       </div>
-    </div>
-
-    <!-- Step 1: Configure -->
-    <div id="step-1" class="step-content card">
-      <h2 class="text-xl font-semibold mb-4">BookStack Configuration</h2>
-
-      <form id="config-form" class="space-y-4">
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">BookStack API URL</label>
-          <input type="url" id="bookstack-url" placeholder="https://your-bookstack.com/api"
-                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-          <p class="text-xs text-gray-500 mt-1">The base URL of your BookStack API (e.g., https://books.example.com/api)</p>
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">API Token ID</label>
-          <input type="text" id="api-id" placeholder="Token ID"
-                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">API Token Secret</label>
-          <input type="password" id="api-secret" placeholder="Token Secret"
-                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Import Path</label>
-          <input type="text" id="import-path" placeholder="./import" value="./import"
-                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-          <p class="text-xs text-gray-500 mt-1">Path to directory containing Confluence exports</p>
-        </div>
-
-        <div class="flex items-center space-x-4">
-          <button type="button" id="test-connection" class="btn btn-secondary">
-            Test Connection
-          </button>
-          <span id="connection-status" class="text-sm"></span>
-        </div>
-
-        <div class="flex justify-between pt-4">
-          <button type="button" id="manage-content" class="btn btn-secondary">
-            Manage Content
-          </button>
-          <button type="submit" class="btn btn-primary">
-            Save & Continue
-          </button>
-        </div>
-      </form>
-    </div>
-
-    <!-- Step 2: Select Export -->
-    <div id="step-2" class="step-content card hidden">
-      <h2 class="text-xl font-semibold mb-4">Select Confluence Export</h2>
-
-      <div id="exports-loading" class="text-center py-8">
-        <div class="spinner"></div>
-        <p class="text-gray-600 mt-2">Loading available exports...</p>
-      </div>
-
-      <div id="exports-list" class="space-y-3 hidden"></div>
-
-      <div id="no-exports" class="text-center py-8 hidden">
-        <p class="text-gray-600">No Confluence exports found in the import directory.</p>
-        <p class="text-sm text-gray-500 mt-2">Place your Confluence export ZIP files or folders in: <code id="import-path-display" class="bg-gray-100 px-2 py-1 rounded"></code></p>
-      </div>
-
-      <!-- Extraction Progress -->
-      <div id="extraction-progress" class="hidden mt-4 p-4 bg-gray-50 rounded-lg">
-        <h3 class="font-medium mb-2">Extracting ZIP file...</h3>
-        <div class="progress-bar-container">
-          <div id="extraction-progress-bar" class="progress-bar" style="width: 0%"></div>
-        </div>
-        <p id="extraction-status" class="text-sm text-gray-600 mt-2"></p>
-      </div>
-
-      <div class="flex justify-between pt-4">
-        <button type="button" id="back-to-config" class="btn btn-secondary">
-          Back
+      <div class="pipeline-steps">
+        <button class="pipeline-step active" data-step="1">
+          <div class="step-node">
+            <i data-lucide="settings"></i>
+          </div>
+          <span class="step-name">Configure</span>
         </button>
-        <button type="button" id="refresh-exports" class="btn btn-secondary">
-          Refresh
+        <button class="pipeline-step" data-step="2">
+          <div class="step-node">
+            <i data-lucide="folder-search"></i>
+          </div>
+          <span class="step-name">Select</span>
+        </button>
+        <button class="pipeline-step" data-step="3">
+          <div class="step-node">
+            <i data-lucide="download"></i>
+          </div>
+          <span class="step-name">Import</span>
+        </button>
+        <button class="pipeline-step" data-step="4">
+          <div class="step-node">
+            <i data-lucide="check-circle"></i>
+          </div>
+          <span class="step-name">Complete</span>
         </button>
       </div>
-    </div>
+    </nav>
 
-    <!-- Step 3: Import Progress -->
-    <div id="step-3" class="step-content card hidden">
-      <h2 class="text-xl font-semibold mb-4">Import Progress</h2>
+    <!-- Main Content Area -->
+    <main class="main-content">
 
-      <div id="import-info" class="mb-4 p-3 bg-blue-50 rounded-lg">
-        <p class="text-sm text-blue-800">Importing: <span id="importing-folder" class="font-medium"></span></p>
-      </div>
+      <!-- Step 1: Configure -->
+      <section id="step-1" class="step-panel">
+        <div class="panel-header">
+          <h2><i data-lucide="settings"></i> Connection Settings</h2>
+          <p>Configure your BookStack API credentials and import directory</p>
+        </div>
 
-      <div class="space-y-4">
-        <div>
-          <div class="flex justify-between text-sm mb-1">
-            <span id="phase-label">Initializing...</span>
-            <span id="progress-percent">0%</span>
+        <form id="config-form" class="config-form">
+          <div class="form-section">
+            <h3><i data-lucide="server"></i> BookStack Server</h3>
+
+            <div class="form-group">
+              <label for="bookstack-url">
+                <span class="label-text">API Endpoint</span>
+                <span class="label-hint">Full URL including /api</span>
+              </label>
+              <div class="input-wrapper">
+                <i data-lucide="link"></i>
+                <input type="url" id="bookstack-url" placeholder="https://books.example.com/api" autocomplete="url">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="api-id">
+                  <span class="label-text">Token ID</span>
+                </label>
+                <div class="input-wrapper">
+                  <i data-lucide="key"></i>
+                  <input type="text" id="api-id" placeholder="Enter token ID" autocomplete="off">
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="api-secret">
+                  <span class="label-text">Token Secret</span>
+                </label>
+                <div class="input-wrapper">
+                  <i data-lucide="lock"></i>
+                  <input type="password" id="api-secret" placeholder="Enter token secret" autocomplete="off">
+                </div>
+              </div>
+            </div>
+
+            <button type="button" id="test-connection" class="btn btn-outline">
+              <i data-lucide="wifi"></i>
+              <span>Test Connection</span>
+              <span class="btn-loader hidden"></span>
+            </button>
           </div>
-          <div class="progress-bar-container">
-            <div id="import-progress-bar" class="progress-bar" style="width: 0%"></div>
+
+          <div class="form-section">
+            <h3><i data-lucide="folder"></i> Import Source</h3>
+
+            <div class="form-group">
+              <label for="import-path">
+                <span class="label-text">Export Directory</span>
+                <span class="label-hint">Path to Confluence exports</span>
+              </label>
+              <div class="input-wrapper">
+                <i data-lucide="folder-open"></i>
+                <input type="text" id="import-path" value="./import" placeholder="./import">
+              </div>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button type="button" id="manage-content" class="btn btn-ghost">
+              <i data-lucide="database"></i>
+              <span>Manage Existing Content</span>
+            </button>
+            <button type="submit" class="btn btn-primary">
+              <span>Continue</span>
+              <i data-lucide="arrow-right"></i>
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Step 2: Select Export -->
+      <section id="step-2" class="step-panel hidden">
+        <div class="panel-header">
+          <h2><i data-lucide="folder-search"></i> Select Export</h2>
+          <p>Choose a Confluence export to import into BookStack</p>
+        </div>
+
+        <!-- Upload Drop Zone -->
+        <div id="upload-zone" class="upload-zone">
+          <input type="file" id="file-input" accept=".zip" hidden>
+          <div class="upload-content">
+            <i data-lucide="upload-cloud"></i>
+            <p class="upload-text">Drag & drop a Confluence export ZIP here</p>
+            <p class="upload-subtext">or</p>
+            <button type="button" id="browse-btn" class="btn btn-outline btn-sm">
+              <i data-lucide="folder-open"></i>
+              <span>Browse Files</span>
+            </button>
+          </div>
+          <div id="upload-progress" class="upload-progress hidden">
+            <div class="upload-progress-bar">
+              <div id="upload-progress-fill" class="upload-progress-fill"></div>
+            </div>
+            <p id="upload-status" class="upload-status">Uploading...</p>
           </div>
         </div>
 
-        <div id="counters" class="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div class="counter-card">
-            <span class="counter-value" id="counter-shelves">0</span>
-            <span class="counter-label">Shelves</span>
+        <div class="exports-container">
+          <!-- Loading State -->
+          <div id="exports-loading" class="loading-state">
+            <div class="skeleton-list">
+              <div class="skeleton-card"></div>
+              <div class="skeleton-card"></div>
+              <div class="skeleton-card"></div>
+            </div>
           </div>
-          <div class="counter-card">
-            <span class="counter-value" id="counter-books">0</span>
-            <span class="counter-label">Books</span>
+
+          <!-- Export List -->
+          <div id="exports-list" class="exports-list hidden"></div>
+
+          <!-- Empty State -->
+          <div id="no-exports" class="empty-state hidden">
+            <div class="empty-icon">
+              <i data-lucide="folder-x"></i>
+            </div>
+            <h3>No Exports Found</h3>
+            <p>Place your Confluence export files in:</p>
+            <code id="import-path-display">./import</code>
+            <button type="button" id="refresh-exports" class="btn btn-outline" style="margin-top: 1rem;">
+              <i data-lucide="refresh-cw"></i>
+              <span>Refresh</span>
+            </button>
           </div>
-          <div class="counter-card">
-            <span class="counter-value" id="counter-chapters">0</span>
-            <span class="counter-label">Chapters</span>
-          </div>
-          <div class="counter-card">
-            <span class="counter-value" id="counter-pages">0</span>
-            <span class="counter-label">Pages</span>
+
+          <!-- Extraction Progress -->
+          <div id="extraction-progress" class="extraction-panel hidden">
+            <div class="extraction-header">
+              <i data-lucide="archive" class="spin"></i>
+              <span>Extracting Archive</span>
+            </div>
+            <div class="extraction-bar">
+              <div id="extraction-progress-bar" class="extraction-fill"></div>
+            </div>
+            <p id="extraction-status" class="extraction-status">Preparing...</p>
           </div>
         </div>
 
-        <div>
-          <h3 class="text-sm font-medium text-gray-700 mb-2">Log Output</h3>
-          <div id="log-output" class="log-container"></div>
-        </div>
-      </div>
-
-      <div class="flex justify-end pt-4">
-        <button type="button" id="cancel-import" class="btn btn-danger">
-          Cancel Import
-        </button>
-      </div>
-    </div>
-
-    <!-- Step 4: Complete -->
-    <div id="step-4" class="step-content card hidden">
-      <div class="text-center py-8">
-        <div class="text-6xl mb-4">&#10003;</div>
-        <h2 class="text-2xl font-semibold text-green-600 mb-2">Import Complete!</h2>
-        <p class="text-gray-600 mb-6">Your Confluence content has been imported to BookStack.</p>
-
-        <div id="final-stats" class="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-2xl mx-auto mb-8">
-          <div class="counter-card">
-            <span class="counter-value" id="final-shelves">0</span>
-            <span class="counter-label">Shelves</span>
-          </div>
-          <div class="counter-card">
-            <span class="counter-value" id="final-books">0</span>
-            <span class="counter-label">Books</span>
-          </div>
-          <div class="counter-card">
-            <span class="counter-value" id="final-chapters">0</span>
-            <span class="counter-label">Chapters</span>
-          </div>
-          <div class="counter-card">
-            <span class="counter-value" id="final-pages">0</span>
-            <span class="counter-label">Pages</span>
-          </div>
-        </div>
-
-        <div class="space-x-4">
-          <a id="view-bookstack" href="#" target="_blank" class="btn btn-primary">
-            View in BookStack
-          </a>
-          <button type="button" id="start-another" class="btn btn-secondary">
-            Import Another
+        <div class="panel-footer">
+          <button type="button" id="back-to-config" class="btn btn-ghost">
+            <i data-lucide="arrow-left"></i>
+            <span>Back</span>
+          </button>
+          <button type="button" id="refresh-exports-btn" class="btn btn-outline">
+            <i data-lucide="refresh-cw"></i>
+            <span>Refresh</span>
           </button>
         </div>
+      </section>
+
+      <!-- Step 3: Import Progress -->
+      <section id="step-3" class="step-panel hidden">
+        <div class="panel-header">
+          <h2><i data-lucide="download"></i> Import Progress</h2>
+          <p>Migrating your content to BookStack</p>
+        </div>
+
+        <div class="step-3-content">
+        <!-- Import Target Info -->
+        <div class="import-target">
+          <div class="target-icon">
+            <i data-lucide="file-text"></i>
+          </div>
+          <div class="target-info">
+            <span class="target-label">Importing</span>
+            <span class="target-name" id="importing-folder">--</span>
+          </div>
+          <div class="target-status" id="import-status-badge">
+            <span class="status-pulse"></span>
+            <span>In Progress</span>
+          </div>
+        </div>
+
+        <!-- Import Stages -->
+        <div class="import-stages">
+          <div class="stage" data-stage="analyze">
+            <div class="stage-indicator"></div>
+            <span class="stage-label">Analyze</span>
+          </div>
+          <div class="stage" data-stage="shelves">
+            <div class="stage-indicator"></div>
+            <span class="stage-label">Shelves</span>
+          </div>
+          <div class="stage" data-stage="books">
+            <div class="stage-indicator"></div>
+            <span class="stage-label">Books</span>
+          </div>
+          <div class="stage" data-stage="chapters">
+            <div class="stage-indicator"></div>
+            <span class="stage-label">Chapters</span>
+          </div>
+          <div class="stage" data-stage="pages">
+            <div class="stage-indicator"></div>
+            <span class="stage-label">Pages</span>
+          </div>
+          <div class="stage" data-stage="attachments">
+            <div class="stage-indicator"></div>
+            <span class="stage-label">Attachments</span>
+          </div>
+          <div class="stage" data-stage="cleanup">
+            <div class="stage-indicator"></div>
+            <span class="stage-label">Cleanup</span>
+          </div>
+        </div>
+
+        <!-- Phase Progress -->
+        <div class="phase-progress">
+          <div class="phase-header">
+            <span class="phase-name" id="phase-label">Initializing...</span>
+            <span class="phase-percent" id="progress-percent">0%</span>
+          </div>
+          <div class="phase-bar">
+            <div class="phase-fill" id="import-progress-bar"></div>
+            <div class="phase-glow" id="import-progress-glow"></div>
+          </div>
+        </div>
+
+        <!-- Live Counters -->
+        <div class="counters-grid">
+          <div class="counter-card" data-type="shelves">
+            <div class="counter-icon"><i data-lucide="library"></i></div>
+            <div class="counter-value" id="counter-shelves">0</div>
+            <div class="counter-label">Shelves</div>
+          </div>
+          <div class="counter-card" data-type="books">
+            <div class="counter-icon"><i data-lucide="book-open"></i></div>
+            <div class="counter-value" id="counter-books">0</div>
+            <div class="counter-label">Books</div>
+          </div>
+          <div class="counter-card" data-type="chapters">
+            <div class="counter-icon"><i data-lucide="bookmark"></i></div>
+            <div class="counter-value" id="counter-chapters">0</div>
+            <div class="counter-label">Chapters</div>
+          </div>
+          <div class="counter-card" data-type="pages">
+            <div class="counter-icon"><i data-lucide="file-text"></i></div>
+            <div class="counter-value" id="counter-pages">0</div>
+            <div class="counter-label">Pages</div>
+          </div>
+        </div>
+
+        <!-- Terminal Log -->
+        <div class="terminal-section">
+          <div class="terminal-header">
+            <div class="terminal-title">
+              <i data-lucide="terminal"></i>
+              <span>Live Output</span>
+            </div>
+            <button type="button" id="toggle-terminal" class="terminal-toggle">
+              <i data-lucide="maximize-2"></i>
+            </button>
+          </div>
+          <div id="log-output" class="terminal-body"></div>
+        </div>
+        </div><!-- end .step-3-content -->
+
+        <div class="panel-footer">
+          <button type="button" id="cancel-import" class="btn btn-danger">
+            <i data-lucide="x-circle"></i>
+            <span>Cancel Import</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Step 4: Complete -->
+      <section id="step-4" class="step-panel hidden">
+        <div class="completion-content">
+          <div class="completion-icon">
+            <svg viewBox="0 0 100 100" class="checkmark-svg">
+              <circle cx="50" cy="50" r="45" class="checkmark-circle"/>
+              <path class="checkmark-check" d="M30 50 L45 65 L70 35"/>
+            </svg>
+          </div>
+
+          <h2 class="completion-title">Migration Complete</h2>
+          <p class="completion-subtitle">Your Confluence content has been successfully imported</p>
+
+          <div class="final-stats">
+            <div class="stat-item">
+              <div class="stat-value" id="final-shelves">0</div>
+              <div class="stat-label">Shelves</div>
+            </div>
+            <div class="stat-divider"></div>
+            <div class="stat-item">
+              <div class="stat-value" id="final-books">0</div>
+              <div class="stat-label">Books</div>
+            </div>
+            <div class="stat-divider"></div>
+            <div class="stat-item">
+              <div class="stat-value" id="final-chapters">0</div>
+              <div class="stat-label">Chapters</div>
+            </div>
+            <div class="stat-divider"></div>
+            <div class="stat-item">
+              <div class="stat-value" id="final-pages">0</div>
+              <div class="stat-label">Pages</div>
+            </div>
+          </div>
+
+          <div class="completion-actions">
+            <a id="view-bookstack" href="#" target="_blank" class="btn btn-primary btn-large">
+              <i data-lucide="external-link"></i>
+              <span>Open BookStack</span>
+            </a>
+            <button type="button" id="start-another" class="btn btn-outline">
+              <i data-lucide="plus"></i>
+              <span>Import Another</span>
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <a href="https://github.com/transcriptionstream/confluence-to-bookstack-wizard" target="_blank" rel="noopener" class="footer-link">
+        <i data-lucide="github"></i>
+        <span>View on GitHub</span>
+      </a>
+      <div class="footer-divider"></div>
+      <a href="https://affordablemagic.net" target="_blank" rel="noopener" class="footer-brand">
+        <span class="footer-brand-text">An <strong class="magic-text">Affordable Magic<i class="sparkle">✦</i><i class="sparkle">✦</i><i class="sparkle">✦</i><i class="sparkle">✦</i><i class="sparkle">✦</i><i class="sparkle">✦</i><i class="sparkle">✦</i><i class="sparkle">✦</i></strong> Product</span>
+      </a>
+    </footer>
+  </div>
+
+  <!-- Confirmation Modal -->
+  <div id="confirm-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog">
+      <div class="modal-icon" id="confirm-icon">
+        <i data-lucide="alert-triangle"></i>
+      </div>
+      <h3 id="confirm-title">Confirm Action</h3>
+      <p id="confirm-message">Are you sure you want to proceed?</p>
+      <div class="modal-actions">
+        <button type="button" id="confirm-cancel" class="btn btn-ghost">Cancel</button>
+        <button type="button" id="confirm-proceed" class="btn btn-primary">Proceed</button>
       </div>
     </div>
   </div>
@@ -216,34 +425,100 @@
   <!-- Manage Content Modal -->
   <div id="content-modal" class="modal hidden">
     <div class="modal-backdrop"></div>
-    <div class="modal-content">
-      <div class="flex justify-between items-center mb-4">
-        <h2 class="text-xl font-semibold">Manage Content</h2>
-        <button type="button" id="close-content-modal" class="text-gray-500 hover:text-gray-700">
-          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-          </svg>
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2><i data-lucide="database"></i> Manage Content</h2>
+        <button type="button" id="close-content-modal" class="modal-close">
+          <i data-lucide="x"></i>
         </button>
       </div>
 
-      <!-- Tabs -->
-      <div class="border-b border-gray-200 mb-4">
-        <nav class="flex space-x-4">
-          <button class="tab-btn active" data-tab="shelves">Shelves</button>
-          <button class="tab-btn" data-tab="books">Books</button>
-          <button class="tab-btn" data-tab="pages">Pages</button>
-        </nav>
+      <div class="modal-tabs">
+        <button class="tab-btn active" data-tab="shelves">
+          <i data-lucide="library"></i>
+          <span>Shelves</span>
+        </button>
+        <button class="tab-btn" data-tab="books">
+          <i data-lucide="book-open"></i>
+          <span>Books</span>
+        </button>
+        <button class="tab-btn" data-tab="pages">
+          <i data-lucide="file-text"></i>
+          <span>Pages</span>
+        </button>
       </div>
 
-      <div id="content-loading" class="text-center py-8">
-        <div class="spinner"></div>
-        <p class="text-gray-600 mt-2">Loading content...</p>
+      <div class="modal-body">
+        <div id="content-loading" class="loading-state">
+          <div class="skeleton-list">
+            <div class="skeleton-item"></div>
+            <div class="skeleton-item"></div>
+            <div class="skeleton-item"></div>
+          </div>
+        </div>
+
+        <div id="content-list" class="content-list hidden"></div>
+
+        <div id="no-content" class="empty-state-small hidden">
+          <i data-lucide="inbox"></i>
+          <span>No content found</span>
+        </div>
       </div>
 
-      <div id="content-list" class="space-y-2 max-h-96 overflow-y-auto hidden"></div>
+      <div class="modal-footer">
+        <button type="button" id="nuke-all-btn" class="btn btn-danger btn-sm nuke-btn">
+          <i data-lucide="bomb"></i>
+          <span>Nuke Everything</span>
+        </button>
+        <span id="content-count" class="content-count"></span>
+        <button type="button" id="delete-all-btn" class="btn btn-danger btn-sm">
+          <i data-lucide="trash-2"></i>
+          <span>Delete All</span>
+        </button>
+      </div>
+    </div>
+  </div>
 
-      <div id="no-content" class="text-center py-8 hidden">
-        <p class="text-gray-600">No content found.</p>
+  <!-- Import Preview Modal -->
+  <div id="preview-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog modal-dialog-wide">
+      <div class="preview-header">
+        <div class="preview-icon">
+          <i data-lucide="file-search"></i>
+        </div>
+        <div class="preview-title">
+          <h3>Import Preview</h3>
+          <p id="preview-name">--</p>
+        </div>
+      </div>
+
+      <div class="preview-stats">
+        <div class="preview-stat">
+          <span class="preview-stat-value" id="preview-pages">--</span>
+          <span class="preview-stat-label">Pages</span>
+        </div>
+        <div class="preview-stat">
+          <span class="preview-stat-value" id="preview-type">--</span>
+          <span class="preview-stat-label">Format</span>
+        </div>
+        <div class="preview-stat">
+          <span class="preview-stat-value" id="preview-size">--</span>
+          <span class="preview-stat-label">Size</span>
+        </div>
+      </div>
+
+      <div class="preview-warning">
+        <i data-lucide="info"></i>
+        <span>This will create new shelves, books, and pages in your BookStack instance.</span>
+      </div>
+
+      <div class="modal-actions">
+        <button type="button" id="preview-cancel" class="btn btn-ghost">Cancel</button>
+        <button type="button" id="preview-start" class="btn btn-primary">
+          <i data-lucide="play"></i>
+          <span>Start Import</span>
+        </button>
       </div>
     </div>
   </div>

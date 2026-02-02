@@ -290,11 +290,43 @@ function buildAttachmentMapping() {
 }
 
 // Create BookStack structure
-async function createBookStackStructure() {
+async function createBookStackStructure(reporter?: any): Promise<{ shelves: number; books: number; pages: number }> {
   const hierarchy = buildHierarchy();
   const rootPages = hierarchy.get(null) || [];
 
-  console.log(`Found ${rootPages.length} root pages`);
+  // Running counters for live updates
+  let shelfCount = 0;
+  let bookCount = 0;
+  let pageCount = 0;
+
+  const getCounters = () => ({
+    shelves: shelfCount,
+    books: bookCount,
+    chapters: 0,
+    pages: pageCount
+  });
+
+  const log = (message: string, level: string = 'info') => {
+    console.log(message);
+    if (reporter) {
+      reporter.log('import', message, level);
+    }
+  };
+
+  const progress = (phase: string, message: string, current?: number, total?: number) => {
+    console.log(message);
+    if (reporter) {
+      const data: any = { phase, message, counters: getCounters() };
+      if (current !== undefined && total !== undefined) {
+        data.current = current;
+        data.total = total;
+        data.percent = Math.round((current / total) * 100);
+      }
+      reporter.progress(data);
+    }
+  };
+
+  log(`Found ${rootPages.length} root pages`);
 
   // Find the main space page (usually "Human Resources")
   let mainPage = rootPages.find(p => p.title.toLowerCase().includes('human resources'));
@@ -303,31 +335,52 @@ async function createBookStackStructure() {
   }
 
   if (!mainPage) {
-    console.log('No main page found');
-    return;
+    log('No main page found', 'error');
+    return { shelves: 0, books: 0, pages: 0 };
   }
 
-  console.log(`Main page: ${mainPage.title}`);
+  log(`Main page: ${mainPage.title}`);
 
   // Create shelf
-  console.log('Creating shelf...');
+  if (reporter) reporter.start({ phase: 'shelves', message: 'Creating shelf...' });
+  progress('shelves', `Creating shelf: ${mainPage.title}`, 0, 1);
   const shelfResp = await axios.createShelf({ name: mainPage.title });
   const shelfId = shelfResp.data.id;
-  console.log(`Created shelf: ${mainPage.title} (ID: ${shelfId})`);
+  shelfCount++;
+  log(`✓ Created shelf: ${mainPage.title} (ID: ${shelfId})`, 'success');
+  progress('shelves', `Created shelf: ${mainPage.title}`, 1, 1);
+  if (reporter) reporter.complete({ phase: 'shelves', message: `Created shelf: ${mainPage.title}`, counters: getCounters() });
 
   // Get child pages (these will be books)
   const childPages = hierarchy.get(mainPage.id) || [];
-  console.log(`Found ${childPages.length} child pages (will be books)`);
+  log(`Found ${childPages.length} child pages (will be books)`);
 
   const bookIds: number[] = [];
+  const totalBooks = childPages.length;
 
+  // Count total pages for progress
+  let totalPages = 0;
   for (const childPage of childPages) {
-    console.log(`Creating book: ${childPage.title}`);
+    totalPages++; // General page
+    const grandChildren = hierarchy.get(childPage.id) || [];
+    totalPages += grandChildren.length;
+  }
+
+  if (reporter) reporter.start({ phase: 'books', message: `Creating ${totalBooks} books...` });
+  progress('books', `Creating ${totalBooks} books...`, 0, totalBooks);
+
+  for (let i = 0; i < childPages.length; i++) {
+    const childPage = childPages[i];
+    progress('books', `Creating book ${i + 1}/${totalBooks}: ${childPage.title}`, i, totalBooks);
 
     try {
       const bookResp = await axios.createBook({ name: childPage.title });
       const bookId = bookResp.data.id;
       bookIds.push(bookId);
+      bookCount++;
+
+      log(`✓ Created book: ${childPage.title}`, 'success');
+      progress('books', `Created book: ${childPage.title}`, bookCount, totalBooks);
 
       // Create general page for the book with its content
       const bodyHtml = getPageBody(childPage);
@@ -338,46 +391,73 @@ async function createBookStackStructure() {
         name: '_General',
         html: html || '<p></p>'
       });
+      pageCount++;
 
       // Map page ID for attachments
       if (attachmentsByPage[childPage.id]) {
         attachmentsByPage[childPage.id].pageNewId = pageResp.data.id;
       }
 
-      // Get grandchildren (these will be pages in the book)
-      const grandChildren = hierarchy.get(childPage.id) || [];
-
-      for (const grandChild of grandChildren) {
-        console.log(`  Creating page: ${grandChild.title}`);
-
-        const grandBodyHtml = getPageBody(grandChild);
-        const grandHtml = convertStorageToHtml(grandBodyHtml, grandChild.id);
-
-        try {
-          const grandPageResp = await axios.createPage({
-            book_id: bookId,
-            name: grandChild.title,
-            html: grandHtml || '<p></p>'
-          });
-
-          if (attachmentsByPage[grandChild.id]) {
-            attachmentsByPage[grandChild.id].pageNewId = grandPageResp.data.id;
-          }
-        } catch (err: any) {
-          console.log(`    Error creating page: ${err.message}`);
-        }
-      }
+      log(`  ✓ Created general page for: ${childPage.title}`, 'success');
+      progress('books', `Created general page for: ${childPage.title}`, bookCount, totalBooks);
 
     } catch (err: any) {
-      console.log(`  Error creating book: ${err.message}`);
+      log(`✗ Error creating book ${childPage.title}: ${err.message}`, 'error');
     }
   }
+
+  if (reporter) reporter.complete({ phase: 'books', message: `Created ${bookCount} books`, counters: getCounters() });
+
+  // Now create pages for each book
+  if (reporter) reporter.start({ phase: 'pages', message: `Creating ${totalPages} pages...` });
+  progress('pages', `Creating ${totalPages} pages...`, 0, totalPages);
+
+  let currentPageIndex = 0;
+  for (let i = 0; i < childPages.length; i++) {
+    const childPage = childPages[i];
+    const grandChildren = hierarchy.get(childPage.id) || [];
+
+    // Find the book ID for this childPage
+    const bookId = bookIds[i];
+    if (!bookId) continue;
+
+    for (let j = 0; j < grandChildren.length; j++) {
+      const grandChild = grandChildren[j];
+      currentPageIndex++;
+      progress('pages', `Creating page ${currentPageIndex}/${totalPages}: ${grandChild.title}`, currentPageIndex, totalPages);
+
+      const grandBodyHtml = getPageBody(grandChild);
+      const grandHtml = convertStorageToHtml(grandBodyHtml, grandChild.id);
+
+      try {
+        const grandPageResp = await axios.createPage({
+          book_id: bookId,
+          name: grandChild.title,
+          html: grandHtml || '<p></p>'
+        });
+        pageCount++;
+
+        if (attachmentsByPage[grandChild.id]) {
+          attachmentsByPage[grandChild.id].pageNewId = grandPageResp.data.id;
+        }
+
+        log(`  ✓ Created page: ${grandChild.title}`, 'success');
+        progress('pages', `Created page: ${grandChild.title}`, currentPageIndex, totalPages);
+      } catch (err: any) {
+        log(`  ✗ Error creating page ${grandChild.title}: ${err.message}`, 'error');
+      }
+    }
+  }
+
+  if (reporter) reporter.complete({ phase: 'pages', message: `Created ${pageCount} pages`, counters: getCounters() });
 
   // Assign books to shelf
   if (bookIds.length > 0) {
     await axios.updateShelf(shelfId, { books: bookIds });
-    console.log(`Assigned ${bookIds.length} books to shelf`);
+    log(`✓ Assigned ${bookIds.length} books to shelf`, 'success');
   }
+
+  return { shelves: 1, books: bookCount, pages: pageCount };
 }
 
 // Save attachment records
@@ -440,15 +520,16 @@ if (process.argv[3] === 'xml-import') {
 export async function runXmlImport(folder: string, reporter?: any): Promise<{ shelves: number; books: number; chapters: number; pages: number }> {
   subDirectory = folder;
 
-  let shelfCount = 0;
-  let bookCount = 0;
-  let pageCount = 0;
+  // Reset state for fresh import
+  pages = new Map();
+  attachments = new Map();
+  bodyContents = new Map();
+  attachmentsByPage = {};
 
-  const log = (phase: string, message: string, level: string = 'info') => {
+  const log = (message: string, level: string = 'info') => {
+    console.log(message);
     if (reporter) {
-      reporter.log(phase, message, level);
-    } else {
-      console.log(message);
+      reporter.log('analyze', message, level);
     }
   };
 
@@ -458,40 +539,30 @@ export async function runXmlImport(folder: string, reporter?: any): Promise<{ sh
     throw new Error(`entities.xml not found at ${xmlPath}`);
   }
 
-  if (reporter) reporter.start({ phase: 'xml-import', message: 'Reading entities.xml...' });
+  // Stage 1: Analyze
+  if (reporter) reporter.start({ phase: 'analyze', message: 'Reading entities.xml...' });
+  log('Reading entities.xml...');
   const xmlContent = fs.readFileSync(xmlPath, 'utf-8');
 
-  if (reporter) reporter.progress({ phase: 'xml-import', message: 'Parsing XML...' });
+  if (reporter) reporter.progress({ phase: 'analyze', message: 'Parsing XML structure...' });
+  log('Parsing XML structure...');
   parseEntitiesXml(xmlContent);
+
+  log('Building attachment mapping...');
   buildAttachmentMapping();
 
-  if (reporter) reporter.progress({ phase: 'xml-import', message: 'Creating BookStack structure...' });
-  await createBookStackStructure();
+  log(`Discovered: ${pages.size} pages, ${attachments.size} attachments`);
+  if (reporter) reporter.complete({ phase: 'analyze', message: `Found ${pages.size} pages, ${attachments.size} attachments` });
+
+  // Stage 2-4: Create structure (shelves, books, pages)
+  const result = await createBookStackStructure(reporter);
 
   saveAttachmentRecords();
 
-  // Count results
-  shelfCount = 1; // We create one shelf per import
-  bookCount = pages.size > 0 ? Math.min(pages.size, 10) : 0; // Estimate
-  pageCount = pages.size;
-
-  if (reporter) {
-    reporter.complete({
-      phase: 'xml-import',
-      message: 'XML import complete',
-      counters: {
-        shelves: shelfCount,
-        books: bookCount,
-        chapters: 0,
-        pages: pageCount,
-      }
-    });
-  }
-
   return {
-    shelves: shelfCount,
-    books: bookCount,
+    shelves: result.shelves,
+    books: result.books,
     chapters: 0,
-    pages: pageCount,
+    pages: result.pages,
   };
 }

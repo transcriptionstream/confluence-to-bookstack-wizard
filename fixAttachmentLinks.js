@@ -144,10 +144,16 @@ function buildAttachmentLookup(attachments) {
     const key = `${att.uploaded_to}:${att.name.toLowerCase()}`;
     lookup[key] = att.id;
   }
+  console.log(`Built attachment lookup with ${Object.keys(lookup).length} entries`);
+  // Log a sample of keys for debugging
+  const sampleKeys = Object.keys(lookup).slice(0, 5);
+  if (sampleKeys.length > 0) {
+    console.log(`Sample lookup keys: ${sampleKeys.join(', ')}`);
+  }
   return lookup;
 }
 
-function fixAttachmentLinksInHtml(html, pathMap, attachmentLookup) {
+function fixAttachmentLinksInHtml(html, pathMap, attachmentLookup, currentPageId) {
   let updatedHtml = html;
   let replacements = 0;
   let notFound = [];
@@ -155,8 +161,12 @@ function fixAttachmentLinksInHtml(html, pathMap, attachmentLookup) {
   // Match old-style attachment links: href="attachments/..."
   const attachmentLinkRegex = /href=["'](attachments\/\d+\/[^"']+)["']/gi;
 
-  // Also match placeholder format: href="[ATTACHMENT:filename]" or URL-encoded versions
-  const placeholderRegex = /href=["'](?:\[|%5[Bb])ATTACHMENT:([^\]"']+?)(?:\]|%5[Dd])["']/gi;
+  // Match placeholder format with various encodings:
+  // - Raw: href="[ATTACHMENT:filename]"
+  // - URL-encoded: href="%5BATTACHMENT:filename%5D"
+  // - HTML-encoded: href="&#91;ATTACHMENT:filename&#93;"
+  // - Mixed: href="[ATTACHMENT:filename%5D"
+  const placeholderRegex = /href=["'](?:\[|%5[Bb]|&#91;|&#x5[Bb];)ATTACHMENT:([^\]"']+?)(?:\]|%5[Dd]|&#93;|&#x5[Dd];)["']/gi;
 
   // Fix old-style attachment paths
   updatedHtml = html.replace(attachmentLinkRegex, (match, oldPath) => {
@@ -182,19 +192,54 @@ function fixAttachmentLinksInHtml(html, pathMap, attachmentLookup) {
   });
 
   // Fix placeholder-style attachment links
+  // First try to match on the CURRENT page, then fall back to global search
   updatedHtml = updatedHtml.replace(placeholderRegex, (match, filename) => {
-    const decodedFilename = decodeURIComponent(filename);
+    const decodedFilename = decodeURIComponent(filename).trim();
+    const filenameLower = decodedFilename.toLowerCase();
 
-    // Search for this filename in the attachment lookup
+    console.log(`  [DEBUG] Found placeholder: "${filename}" on page ${currentPageId}`);
+
+    // First: Try to find attachment on the CURRENT page (most likely correct)
+    if (currentPageId) {
+      const currentPageKey = `${currentPageId}:${filenameLower}`;
+      console.log(`  [DEBUG] Looking for key: "${currentPageKey}"`);
+      if (attachmentLookup[currentPageKey]) {
+        console.log(`  [DEBUG] ✓ Found on current page: ${attachmentLookup[currentPageKey]}`);
+        replacements++;
+        return `href="/attachments/${attachmentLookup[currentPageKey]}"`;
+      }
+    }
+
+    // Second: Try exact filename match on any page (fallback)
     for (const [key, attachmentId] of Object.entries(attachmentLookup)) {
-      const [pageId, attName] = key.split(':');
-      if (attName === decodedFilename.toLowerCase() || attName === filename.toLowerCase()) {
+      const colonIndex = key.indexOf(':');
+      const attName = key.substring(colonIndex + 1);
+      if (attName === filenameLower) {
+        console.log(`  [DEBUG] ✓ Found on different page via key "${key}": ${attachmentId}`);
         replacements++;
         return `href="/attachments/${attachmentId}"`;
       }
     }
 
-    notFound.push({ path: filename, reason: 'placeholder not matched' });
+    // Third: Try partial/fuzzy match (handle encoding issues)
+    for (const [key, attachmentId] of Object.entries(attachmentLookup)) {
+      const colonIndex = key.indexOf(':');
+      const attName = key.substring(colonIndex + 1);
+      // Try URL-decoded comparison
+      try {
+        const decodedAttName = decodeURIComponent(attName);
+        if (decodedAttName === filenameLower || decodedAttName === decodedFilename.toLowerCase()) {
+          console.log(`  [DEBUG] ✓ Found via fuzzy match "${key}": ${attachmentId}`);
+          replacements++;
+          return `href="/attachments/${attachmentId}"`;
+        }
+      } catch (e) {
+        // Skip invalid URL encoding
+      }
+    }
+
+    console.log(`  [DEBUG] ✗ No match found for "${filename}"`);
+    notFound.push({ path: filename, pageId: currentPageId, reason: 'placeholder not matched' });
     return match;
   });
 
@@ -229,14 +274,14 @@ async function main() {
       const pageDetails = await getPageDetails(page.id);
       const html = pageDetails.html || '';
 
-      if (!html.includes('attachments/') && !html.includes('ATTACHMENT:')) {
+      if (!html.includes('attachments/') && !html.includes('ATTACHMENT:') && !html.includes('%5BATTACHMENT') && !html.includes('&#91;ATTACHMENT')) {
         if (pagesChecked % 50 === 0) {
           console.log(`[${pagesChecked}/${pages.length}] Checking...`);
         }
         continue;
       }
 
-      const { updatedHtml, replacements, notFound } = fixAttachmentLinksInHtml(html, pathMap, attachmentLookup);
+      const { updatedHtml, replacements, notFound } = fixAttachmentLinksInHtml(html, pathMap, attachmentLookup, page.id);
       allNotFound = allNotFound.concat(notFound);
 
       if (replacements > 0 && updatedHtml !== html) {
@@ -295,11 +340,11 @@ async function runFixAttachmentLinks(subDirectory, reporter) {
       const pageDetails = await getPageDetails(page.id);
       const html = pageDetails.html || '';
 
-      if (!html.includes('attachments/') && !html.includes('ATTACHMENT:')) {
+      if (!html.includes('attachments/') && !html.includes('ATTACHMENT:') && !html.includes('%5BATTACHMENT') && !html.includes('&#91;ATTACHMENT')) {
         continue;
       }
 
-      const { updatedHtml, replacements } = fixAttachmentLinksInHtml(html, pathMap, attachmentLookup);
+      const { updatedHtml, replacements } = fixAttachmentLinksInHtml(html, pathMap, attachmentLookup, page.id);
 
       if (replacements > 0 && updatedHtml !== html) {
         await updatePageHtml(page.id, updatedHtml, pageDetails.name, pageDetails.book_id);

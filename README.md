@@ -1,17 +1,16 @@
 # Confluence to BookStack Wizard
 
-An interactive terminal wizard for migrating Confluence spaces to BookStack. Features a full TUI (Terminal User Interface) with guided workflows, progress tracking, and post-import cleanup tools.
-
-![Main Menu](screenshots/mainmenu.png)
+An interactive wizard for migrating Confluence spaces to BookStack. Features both a modern **Web UI** and a terminal interface (TUI) with guided workflows, real-time progress tracking, and post-import cleanup tools.
 
 ## Features
 
-- **Interactive TUI** - Guided menus instead of memorizing CLI commands
+- **Web Interface** - Modern browser-based wizard with drag & drop uploads
+- **Terminal Interface** - Full TUI for command-line workflows
 - **HTML & XML Export Support** - Works with both Confluence export formats
-- **Full Import Workflow** - One-click import with attachments and cleanup
-- **Progress Tracking** - Live status bar showing current operation
-- **Post-Import Cleanup Tools** - Fix broken links, images, and Confluence artifacts
-- **Safe Delete** - Remove shelves with confirmation prompts
+- **Live Progress Tracking** - Real-time counters and phase visualization
+- **Drag & Drop Upload** - Upload ZIP exports directly in the browser
+- **Post-Import Cleanup** - Automatic fixing of links, images, and Confluence artifacts
+- **Content Management** - View and delete existing BookStack content
 - **Rate Limiting** - Built-in retry logic to handle API throttling
 - **Cross-Platform** - Works on macOS, Linux, and Windows
 
@@ -31,7 +30,53 @@ npm install
 
 ## Usage
 
-Start the wizard:
+### Web Interface (Recommended)
+
+Start the web-based migration wizard:
+
+```bash
+npm run web
+```
+
+Then open **http://localhost:3456** in your browser.
+
+#### Step 1: Configure
+
+Enter your BookStack API credentials and import path.
+
+<p>
+  <img src="screenshots/webui-configure.png" width="480" />
+</p>
+
+#### Step 2: Select Export
+
+Choose a Confluence export to import. You can drag & drop ZIP files directly or browse existing exports.
+
+<p>
+  <img src="screenshots/webui-select.png" width="480" />
+</p>
+
+#### Step 3: Import
+
+Watch real-time progress as your content is imported with live counters and phase tracking.
+
+<p>
+  <img src="screenshots/webui-import.png" width="28%" />
+  <img src="screenshots/webui-import-attachments.png" width="28%" />
+  <img src="screenshots/webui-cleanup.png" width="28%" />
+</p>
+
+#### Step 4: Complete
+
+View your import summary and open BookStack to see your migrated content.
+
+<p>
+  <img src="screenshots/webui-complete.png" width="480" />
+</p>
+
+### Terminal Interface
+
+Start the terminal wizard:
 
 ```bash
 npm run setup
@@ -41,7 +86,9 @@ npm run setup
 
 On first run (or if no `.env` file exists), the wizard will guide you through configuration:
 
-![Configuration](screenshots/configuration.png)
+<p>
+  <img src="screenshots/configuration.png" width="480" />
+</p>
 
 You'll be prompted to enter:
 - **BookStack URL** - Your BookStack instance URL
@@ -55,7 +102,9 @@ The wizard saves these settings to a `.env` file automatically.
 
 Select **Full Import Workflow** to run a complete migration:
 
-![Full Import](screenshots/fullimport.png)
+<p>
+  <img src="screenshots/fullimport.png" width="480" />
+</p>
 
 1. Choose a Confluence export ZIP file or folder
 2. Import all pages and structure
@@ -120,12 +169,6 @@ The cleanup tools fix common issues after import:
 
 ### Rate Limiting (429 Errors)
 The wizard includes automatic retry with exponential backoff. If you see frequent rate limiting, the scripts will wait and retry automatically.
-
-### Missing Attachments
-Run the **Upload Attachments** step after importing. Attachments require page IDs which are only available after import.
-
-### Broken Internal Links
-Run **Post-Import Cleanup** to update internal links to their new BookStack URLs.
 
 ## Author
 

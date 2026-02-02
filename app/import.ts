@@ -48,6 +48,35 @@ let chapterCreatedCount = 0
 let bookCreatedCount = 0
 
 let pagesNotCreated = []
+
+// Module-level reporter for verbose logging
+let currentReporter: any = null;
+let currentPhase: string = 'import';
+
+const logVerbose = (message: string, level: string = 'info') => {
+  console.log(`[${currentPhase}] ${message}`);
+  if (currentReporter) {
+    currentReporter.log(currentPhase, message, level);
+  }
+};
+
+const emitProgress = (message: string, current?: number, total?: number) => {
+  if (currentReporter) {
+    const data: any = { phase: currentPhase, message };
+    if (current !== undefined && total !== undefined) {
+      data.current = current;
+      data.total = total;
+      data.percent = Math.round((current / total) * 100);
+    }
+    data.counters = {
+      shelves: shelves.length,
+      books: bookCreatedCount,
+      chapters: chapterCreatedCount,
+      pages: pageCreatedCount
+    };
+    currentReporter.progress(data);
+  }
+};
 let chaptersNotCreated = []
 let booksNotCreated = []
 
@@ -105,7 +134,7 @@ const linkToType = (filename: string) => {
 const getSlugFromTitleInFile = (filename: string) => {
   const file = fs.readFileSync(getFilePath(filename), 'utf-8')
   const dom = new jsdom.JSDOM(file);
-  let title = dom.window.document.getElementById('title-text')?.textContent || ''
+  let title = (dom.window.document.getElementById('title-text')?.textContent || '').trim()
   if (title.includes(" : ")) {
     title = title.split(' : ')[1]
   }
@@ -252,16 +281,25 @@ const replaceBreadcrumbsAndLinks = (dom: any, breadcrumbs: HTMLElement, filename
 }
 
 const sortFiles = () => {
-  const files = fs.readdirSync(`${fileDirectory}/${subDirectory}`)
+  const readPath = `${fileDirectory}/${subDirectory}`;
+  logVerbose(`sortFiles: Reading from path: ${readPath}`);
+
+  const files = fs.readdirSync(readPath)
   const htmlFiles = files.filter(fn => fn.endsWith('.html'))
-  
+
+  logVerbose(`sortFiles: Found ${htmlFiles.length} HTML files`);
+
   const threeBreadcrumbsFilenames = []
   const branchesWithFourOrMore = []
+  let filesWithBreadcrumbs = 0;
+  let filesWithoutBreadcrumbs = 0;
+
   htmlFiles.forEach(filename => {
     const file = fs.readFileSync(getFilePath(filename), 'utf-8')
     const dom = new jsdom.JSDOM(file);
     const breadcrumbs = dom.window.document.getElementById('breadcrumbs')
     if (breadcrumbs) {
+      filesWithBreadcrumbs++;
       const breadcrumbListItems = breadcrumbs.getElementsByTagName('li')
   
       if (breadcrumbListItems.length === 1) {
@@ -294,8 +332,17 @@ const sortFiles = () => {
           pageFilenames: sortedFiles.chapters[branch[3]] && sortedFiles.chapters[branch[3]].pageFilenames ? [...sortedFiles.chapters[branch[3]].pageFilenames, filename] : [filename]
         }
       }
+    } else {
+      filesWithoutBreadcrumbs++;
+      // Log the first few files without breadcrumbs to help debug
+      if (filesWithoutBreadcrumbs <= 3) {
+        logVerbose(`sortFiles: No breadcrumbs in file: ${filename}`, 'warning');
+      }
     }
   })
+
+  logVerbose(`sortFiles: ${filesWithBreadcrumbs} files with breadcrumbs, ${filesWithoutBreadcrumbs} without`);
+  logVerbose(`sortFiles: Sorted into - shelves: ${sortedFiles.shelves.length}, books: ${sortedFiles.books.length}, chapters: ${Object.keys(sortedFiles.chapters).length}, pages: ${sortedFiles.pages.length}`);
 
   threeBreadcrumbsFilenames.forEach(filename => {
     const indexIncludingThisFile = branchesWithFourOrMore.findIndex(arr => arr.includes(filename))
@@ -312,98 +359,98 @@ const sortFiles = () => {
 }
 
 const createChapters = async () => {
-  const chapterFilenames = Object.keys(sortedFiles.chapters)
-  console.log('DEBUG: Total books in array:', books.length)
-  console.log('DEBUG: Book previousIds:', books.map(b => b.previousId))
-  console.log('DEBUG: Chapter count:', chapterFilenames.length)
+  currentPhase = 'chapters';
+  const chapterFilenames = Object.keys(sortedFiles.chapters);
+  const totalChapters = chapterFilenames.length;
 
-  const promises = chapterFilenames.map((chapterFilename, i) => {
-    const file = fs.readFileSync(getFilePath(chapterFilename), 'utf-8')
+  for (let i = 0; i < chapterFilenames.length; i++) {
+    const chapterFilename = chapterFilenames[i];
+    const file = fs.readFileSync(getFilePath(chapterFilename), 'utf-8');
     const dom = new jsdom.JSDOM(file);
-    const breadcrumbs = dom.window.document.getElementById('breadcrumbs')
-    const titleHeading = dom.window.document.getElementById('title-heading')
-    const bookPreviousIdNeeded = sortedFiles.chapters[chapterFilename].bookPreviousId
-    const parentBook = books.find(book => book.previousId === bookPreviousIdNeeded)
+    const breadcrumbs = dom.window.document.getElementById('breadcrumbs');
+    const titleHeading = dom.window.document.getElementById('title-heading');
+    const bookPreviousIdNeeded = sortedFiles.chapters[chapterFilename].bookPreviousId;
+    const parentBook = books.find(book => book.previousId === bookPreviousIdNeeded);
 
     if (!parentBook) {
-      console.log('DEBUG: Missing parent book for chapter:', chapterFilename)
-      console.log('DEBUG: Looking for bookPreviousId:', bookPreviousIdNeeded)
-      console.log('DEBUG: sortedFiles.chapters entry:', JSON.stringify(sortedFiles.chapters[chapterFilename]))
+      logVerbose(`Warning: Missing parent book for chapter: ${chapterFilename}`, 'warning');
+      continue;
     }
 
-    const titleTextElement = dom.window.document.getElementById('title-text')
-    let title = "generic title"
+    const titleTextElement = dom.window.document.getElementById('title-text');
+    let title = "generic title";
     if (titleTextElement) {
-      title = dom.window.document.getElementById('title-text').textContent
+      title = titleTextElement.textContent.trim();
     }
-    titleHeading.remove()
-    breadcrumbs.remove()
-    const htmlString = dom.serialize()
+    titleHeading.remove();
+    breadcrumbs.remove();
+    const htmlString = dom.serialize();
 
     if (title.includes(" : ")) {
-      title = title.split(' : ')[1]
+      title = title.split(' : ')[1].trim();
     }
 
-    const params = {
-      name: title,
-      book_id: parentBook.book
+    logVerbose(`Creating chapter ${i + 1}/${totalChapters}: ${title}`);
+    emitProgress(`Creating chapter: ${title}`, i, totalChapters);
+
+    try {
+      const chapterResp = await axios.createChapter({
+        name: title,
+        book_id: parentBook.book
+      });
+
+      const newChapterId = chapterResp.data.id;
+      chapters.push({
+        id: newChapterId,
+        previousId: sortedFiles.chapters[chapterFilename].chapterPreviousId
+      });
+
+      sortedFiles.chapters[chapterFilename].pageFilenames.forEach(fn => {
+        sortedFiles.pagesBelongChapter.push({
+          chapterId: newChapterId,
+          pageFilename: fn
+        });
+      });
+
+      chapterCreatedCount++;
+      logVerbose(`✓ Created chapter: ${title}`, 'success');
+      emitProgress(`Created chapter: ${title}`, chapterCreatedCount, totalChapters);
+
+      // Create general page for chapter
+      try {
+        const pageResp = await axios.createPage({
+          chapter_id: newChapterId,
+          name: "_General",
+          html: htmlString
+        });
+        const pageId = getIdFromFilename(chapterFilename);
+        if (!attachmentsByPage[pageId]) {
+          attachmentsByPage[pageId] = { attachmentHrefs: [], pageNewId: pageResp.data.id };
+        } else {
+          attachmentsByPage[pageId].pageNewId = pageResp.data.id;
+        }
+        chapterGeneralPages.push(chapterFilename);
+      } catch (err) {
+        retry.chapterGeneralPages.push({
+          chapter_id: newChapterId,
+          name: "_General",
+          html: htmlString
+        });
+      }
+    } catch (err) {
+      logVerbose(`✗ Failed to create chapter: ${title}`, 'error');
+      chaptersNotCreated.push(chapterFilename);
+      retry.chapters.push({
+        chapterParams: { name: title, book_id: parentBook.book },
+        generalHtml: htmlString
+      });
     }
-    
-    return new Promise(resolve => setTimeout(resolve, i * timeoutBetweenPages))
-      .then(() => {
-        return axios.createChapter(params)
-          .then(resp => {
-            const newChapterId = resp.data.id
-            chapters.push({
-              id: newChapterId,
-              previousId: sortedFiles.chapters[chapterFilename].chapterPreviousId
-            })
-            sortedFiles.chapters[chapterFilename].pageFilenames.forEach(fn => {
-              sortedFiles.pagesBelongChapter.push({
-                chapterId: newChapterId,
-                pageFilename: fn
-              })
-            })
-            
-            console.log(`\x1b[32m ${chapterFilename} \x1b[0m`)
-            chapterCreatedCount++
 
-            return newChapterId
-          })
-          .then(newChapterId => {
-            const generalPageParams = {
-              chapter_id: newChapterId,
-              name: "_General",
-              html: htmlString
-            }
-            return axios.createPage(generalPageParams)
-              .then(resp => {
-                const pageId = getIdFromFilename(chapterFilename)
-                if (!attachmentsByPage[pageId]) {
-                  attachmentsByPage[pageId] = { attachmentHrefs: [], pageNewId: resp.data.id }
-                } else {
-                  attachmentsByPage[pageId].pageNewId = resp.data.id
-                }
-                chapterGeneralPages.push(chapterFilename)
-              })
-              .catch(err => {
-                retry.chapterGeneralPages.push(generalPageParams)
-              })
-          })
-          .catch(err => {
-            console.log(err)
-            chaptersNotCreated.push(chapterFilename)
-            retry.chapters.push({
-              chapterParams: params,
-              generalHtml: htmlString
-            })
-            console.log(`\x1b[31m ${chapterFilename} \x1b[0m`)
-          })
-      })
-  })
-
-  const createdChapters = Promise.all(promises)
-  return createdChapters
+    // Small delay between chapters
+    if (i < chapterFilenames.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
 }
 
 const putBooksOnShelves = async () => {
@@ -419,93 +466,94 @@ const putBooksOnShelves = async () => {
 }
 
 const createBooks = async () => {
-  // Build a set of shelf filenames for quick lookup
-  const shelfFilenames = new Set(sortedFiles.shelves)
+  currentPhase = 'books';
+  const shelfFilenames = new Set(sortedFiles.shelves);
+  const totalBooks = sortedFiles.books.length;
 
-  const promises = sortedFiles.books.map((filename, i) => {
-    const file = fs.readFileSync(getFilePath(filename), 'utf-8')
+  for (let i = 0; i < sortedFiles.books.length; i++) {
+    const filename = sortedFiles.books[i];
+    const file = fs.readFileSync(getFilePath(filename), 'utf-8');
     const dom = new jsdom.JSDOM(file);
-    const breadcrumbs = dom.window.document.getElementById('breadcrumbs')
-    const breadcrumbLinkItems = breadcrumbs.getElementsByTagName('a')
-    var arr = [...breadcrumbLinkItems];
-    let parentShelf
-    arr.forEach((item, i) => {
-      const href = item.getAttribute('href')
-      // Check if this breadcrumb points to a shelf file (either by 'Home_' pattern or by matching shelf filenames)
+    const breadcrumbs = dom.window.document.getElementById('breadcrumbs');
+    const breadcrumbLinkItems = breadcrumbs.getElementsByTagName('a');
+    const arr = [...breadcrumbLinkItems];
+
+    let parentShelf;
+    arr.forEach((item) => {
+      const href = item.getAttribute('href');
       if (href.includes('Home_') || shelfFilenames.has(href)) {
-        parentShelf = shelves.find(shelf => shelf.previousId === getIdFromHref(item))
+        parentShelf = shelves.find(shelf => shelf.previousId === getIdFromHref(item));
       }
-    })
+    });
 
     if (!parentShelf) {
-      console.log('DEBUG: No parent shelf found for book:', filename)
-      console.log('DEBUG: Breadcrumbs:', arr.map(a => a.getAttribute('href')))
-      console.log('DEBUG: Shelf filenames:', [...shelfFilenames])
-      console.log('DEBUG: Shelves array:', shelves)
+      logVerbose(`Warning: No parent shelf found for book: ${filename}`, 'warning');
+      continue;
     }
-    
-    const titleTextElement = dom.window.document.getElementById('title-text')
-    let title = "generic title"
+
+    const titleTextElement = dom.window.document.getElementById('title-text');
+    let title = "generic title";
     if (titleTextElement) {
-      title = dom.window.document.getElementById('title-text').textContent
+      title = titleTextElement.textContent.trim();
     }
-
     if (title.includes(" : ")) {
-      title = title.split(' : ')[1]
+      title = title.split(' : ')[1].trim();
     }
 
-    replaceBreadcrumbsAndLinks(dom, breadcrumbs, filename)
-    const htmlString = dom.serialize()
+    logVerbose(`Creating book ${i + 1}/${totalBooks}: ${title}`);
+    emitProgress(`Creating book: ${title}`, i, totalBooks);
 
-    let bookId
-    return new Promise(resolve => setTimeout(resolve, i * timeoutBetweenPages))
-      .then(() => {
-        return axios.createBook({
-          name: `${title}`,
-        })
-          .then(resp => {
-            bookId = resp.data.id
-            books.push({
-              book: bookId,
-              previousId: getIdFromFilename(filename), 
-              shelf: parentShelf.id
-            })
-            bookCreatedCount++
-            return axios.createPage({
-              book_id: bookId,
-              name: "_General",
-              html: htmlString
-            })
-              .then(resp2 => {
-                const pageId = getIdFromFilename(filename)
-                if (!attachmentsByPage[pageId]) {
-                  attachmentsByPage[pageId] = { attachmentHrefs: [], pageNewId: resp2.data.id }
-                } else {
-                  attachmentsByPage[pageId].pageNewId = resp2.data.id
-                }
-                return resp2
-              })
-              .catch(err2 => {
-                console.log(err2)
-              })
-          })
-          .then(resp => {
-            console.log(`\x1b[32m ${filename} \x1b[0m`)
-            return resp.data
-          })
-          .catch(err => {
-            console.log('createBook ERR:', err)
-            console.log(`\x1b[31m ${filename} \x1b[0m`)
-            booksNotCreated.push(filename)
-          })
-    })
-  })
-  const createdBooks = await Promise.all(promises)
-  return createdBooks
+    replaceBreadcrumbsAndLinks(dom, breadcrumbs, filename);
+    const htmlString = dom.serialize();
+
+    try {
+      const bookResp = await axios.createBook({ name: title });
+      const bookId = bookResp.data.id;
+
+      books.push({
+        book: bookId,
+        previousId: getIdFromFilename(filename),
+        shelf: parentShelf.id
+      });
+      bookCreatedCount++;
+
+      try {
+        const pageResp = await axios.createPage({
+          book_id: bookId,
+          name: "_General",
+          html: htmlString
+        });
+        const pageId = getIdFromFilename(filename);
+        if (!attachmentsByPage[pageId]) {
+          attachmentsByPage[pageId] = { attachmentHrefs: [], pageNewId: pageResp.data.id };
+        } else {
+          attachmentsByPage[pageId].pageNewId = pageResp.data.id;
+        }
+      } catch (err) {
+        logVerbose(`Failed to create general page for book: ${title}`, 'error');
+      }
+
+      logVerbose(`✓ Created book: ${title}`, 'success');
+      emitProgress(`Created book: ${title}`, bookCreatedCount, totalBooks);
+    } catch (err) {
+      logVerbose(`✗ Failed to create book: ${title}`, 'error');
+      booksNotCreated.push(filename);
+    }
+
+    // Small delay between books
+    if (i < sortedFiles.books.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
 }
 
 const createShelves = async () => {
-  const shelfPromises = sortedFiles.shelves.map((shelfFileName, i) => {
+  currentPhase = 'shelves';
+  const totalShelves = sortedFiles.shelves.length;
+  let completedShelves = 0;
+
+  for (let i = 0; i < sortedFiles.shelves.length; i++) {
+    const shelfFileName = sortedFiles.shelves[i];
     const file = fs.readFileSync(getFilePath(shelfFileName), 'utf-8')
     const dom = new jsdom.JSDOM(file);
     const breadCrumbs = dom.window.document.getElementById('breadcrumbs')
@@ -514,55 +562,53 @@ const createShelves = async () => {
     breadCrumbs.remove()
     titleHeading.remove()
     const htmlString = dom.serialize()
-    const title = breadcrumbsFirst[0].getElementsByTagName('a')[0].textContent
+    const title = breadcrumbsFirst[0].getElementsByTagName('a')[0].textContent.trim()
 
-    let bookId
-    return axios.createBook({
-      name: `${title}: Home`
-    })
-      .then(resp => {
-        bookId = resp.data.id
-        return axios.createPage({
+    logVerbose(`Creating shelf ${i + 1}/${totalShelves}: ${title}`);
+    emitProgress(`Creating shelf: ${title}`, i, totalShelves);
+
+    try {
+      const bookResp = await axios.createBook({ name: `${title}: Home` });
+      const bookId = bookResp.data.id;
+
+      try {
+        const pageResp = await axios.createPage({
           book_id: bookId,
           name: "_General",
           html: htmlString
-        })
-          .then(resp => {
-            const pageId = getIdFromFilename(shelfFileName)
-            if (!attachmentsByPage[pageId]) {
-              attachmentsByPage[pageId] = { attachmentHrefs: [], pageNewId: resp.data.id }
-            } else {
-              attachmentsByPage[pageId].pageNewId = resp.data.id
-            }
-          })
-          .catch(err => {
-            console.log('book general page error')
-          })
-      })
-      .then(resp => {
-        return axios.createShelf({
-          name: title,
-          books: [bookId],
-        })
-      })
-      .then(resp => {
-        shelves.push({
-          id: resp.data.id,
-          previousId: getIdFromFilename(shelfFileName)
-        })
-        books.push({
-          book: bookId,
-          previousId: getIdFromFilename(shelfFileName), 
-          shelf: resp.data.id
-        })
-        return resp.data
-      })
-      .catch(err => {
-        console.log(err)
-      })
-  })
-  const createdShelves = await Promise.all(shelfPromises)
-  return createdShelves
+        });
+        const pageId = getIdFromFilename(shelfFileName);
+        if (!attachmentsByPage[pageId]) {
+          attachmentsByPage[pageId] = { attachmentHrefs: [], pageNewId: pageResp.data.id };
+        } else {
+          attachmentsByPage[pageId].pageNewId = pageResp.data.id;
+        }
+      } catch (err) {
+        logVerbose(`Failed to create general page for shelf: ${title}`, 'error');
+      }
+
+      const shelfResp = await axios.createShelf({
+        name: title,
+        books: [bookId],
+      });
+
+      shelves.push({
+        id: shelfResp.data.id,
+        previousId: getIdFromFilename(shelfFileName)
+      });
+      books.push({
+        book: bookId,
+        previousId: getIdFromFilename(shelfFileName),
+        shelf: shelfResp.data.id
+      });
+
+      completedShelves++;
+      logVerbose(`✓ Created shelf: ${title}`, 'success');
+      emitProgress(`Created shelf: ${title}`, completedShelves, totalShelves);
+    } catch (err) {
+      logVerbose(`✗ Failed to create shelf: ${title}`, 'error');
+    }
+  }
 }
 
 const createAttachment = async () => {
@@ -602,7 +648,12 @@ const replaceImgWithBase64 = (dom, fileId) => {
 
 const createPages = async (pagesArray) => {
   const filenames = pagesArray.map(p => p.pageFilename)
-  const promises = filenames.map((filename, i) => {
+  const totalPages = filenames.length;
+  const isChapterPages = pagesArray[0]?.chapterId !== undefined;
+  const pageType = isChapterPages ? 'chapter page' : 'standalone page';
+
+  for (let i = 0; i < filenames.length; i++) {
+    const filename = filenames[i];
     const file = fs.readFileSync(getFilePath(filename), 'utf-8')
     let dom = new jsdom.JSDOM(file);
     const breadcrumbs = dom.window.document.getElementById('breadcrumbs')
@@ -610,23 +661,26 @@ const createPages = async (pagesArray) => {
     const titleHeading = dom.window.document.getElementById('title-heading')
     var arr = [...breadcrumbLinkItems];
     let parentBook
-    arr.forEach((item, i) => {
-      if (i === 2) {
+    arr.forEach((item, idx) => {
+      if (idx === 2) {
         const parentBookPreviousId = getIdFromHref(item)
         parentBook = books.find(b => b.previousId === parentBookPreviousId)
       }
     })
-    
+
     const titleTextElement = dom.window.document.getElementById('title-text')
     let title = "title not found"
     if (titleTextElement) {
-      title = dom.window.document.getElementById('title-text').textContent
+      title = dom.window.document.getElementById('title-text').textContent.trim()
     }
 
     if (title.includes(" : ")) {
-      title = title.split(' : ')[1]
+      title = title.split(' : ')[1].trim()
     }
-    
+
+    logVerbose(`Creating ${pageType} ${i + 1}/${totalPages}: ${title}`);
+    emitProgress(`Creating ${pageType}: ${title}`, i + 1, totalPages);
+
     replaceImgWithBase64(dom, getIdFromFilename(filename))
     titleHeading.remove()
     replaceBreadcrumbsAndLinks(dom, breadcrumbs, filename)
@@ -642,30 +696,29 @@ const createPages = async (pagesArray) => {
     } else {
       params.book_id = parentBook.book
     }
-    return new Promise(resolve => setTimeout(resolve, i * timeoutBetweenPages))
-      .then(() => {
-        return axios.createPage(params)
-         .then(resp => {
-            console.log(`\x1b[32m ${filename} \x1b[0m`)
-            const pageId = getIdFromFilename(filename)
-            // Always register the BookStack page ID for attachment uploads
-            if (!attachmentsByPage[pageId]) {
-              attachmentsByPage[pageId] = { attachmentHrefs: [], pageNewId: resp.data.id }
-            } else {
-              attachmentsByPage[pageId].pageNewId = resp.data.id
-            }
-            pageCreatedCount++
-         })
-         .catch(err => {
-            console.log(`\x1b[31m ${filename} \x1b[0m`)
-            pagesNotCreated.push(filename)
-            console.log(err)
-         })
-      })
-  })
 
-  const createdPages = Promise.all(promises)
-  return createdPages
+    // Add delay between pages
+    if (i > 0) {
+      await new Promise(resolve => setTimeout(resolve, timeoutBetweenPages));
+    }
+
+    try {
+      const resp = await axios.createPage(params);
+      const pageId = getIdFromFilename(filename)
+      // Always register the BookStack page ID for attachment uploads
+      if (!attachmentsByPage[pageId]) {
+        attachmentsByPage[pageId] = { attachmentHrefs: [], pageNewId: resp.data.id }
+      } else {
+        attachmentsByPage[pageId].pageNewId = resp.data.id
+      }
+      pageCreatedCount++
+      logVerbose(`✓ Created page: ${title}`, 'success');
+      emitProgress(`Created page: ${title}`, i + 1, totalPages);
+    } catch (err) {
+      logVerbose(`✗ Failed to create page: ${title}`, 'error');
+      pagesNotCreated.push(filename)
+    }
+  }
 }
 
 const fixLinks = () => {
@@ -887,6 +940,31 @@ if (process.argv[3] === 'fixLinks') {
 // Exported function for web interface
 export async function runImport(folder: string, reporter?: any): Promise<{ shelves: number; books: number; chapters: number; pages: number }> {
   subDirectory = folder;
+  currentReporter = reporter;
+  currentPhase = 'import';
+
+  // Reset all module-level state for fresh import
+  shelves = [];
+  books = [];
+  chapters = [];
+  chapterGeneralPages = [];
+  attachmentsByPage = {};
+  pageCreatedCount = 0;
+  chapterCreatedCount = 0;
+  bookCreatedCount = 0;
+  pagesNotCreated = [];
+  chaptersNotCreated = [];
+  booksNotCreated = [];
+  sortedFiles.shelves = [];
+  sortedFiles.books = [];
+  sortedFiles.chapterFilenames = [];
+  sortedFiles.chapters = {};
+  sortedFiles.pages = [];
+  sortedFiles.pagesBelongChapter = [];
+  sortedFiles.pagesBelongBook = [];
+  retry.chapters = [];
+  retry.chapterGeneralPages = [];
+  retry.pages = [];
 
   const log = (phase: string, message: string, level: string = 'info') => {
     if (reporter) {
@@ -897,52 +975,101 @@ export async function runImport(folder: string, reporter?: any): Promise<{ shelv
   };
 
   return new Promise((resolve) => {
+    // Stage 1: Analyze
     if (reporter) {
-      reporter.start({ phase: 'import', message: 'Sorting files...' });
+      reporter.start({ phase: 'analyze', message: 'Analyzing export structure...' });
     }
+    log('analyze', 'Scanning HTML files...', 'info');
     sortFiles();
-    log('import', 'Files sorted', 'success');
+
+    // Verbose logging of discovered content
+    const totalPages = sortedFiles.pages.length;
+    const totalChapters = Object.keys(sortedFiles.chapters).length;
+    const standalonePages = sortedFiles.pagesBelongBook.length;
+    const chapterPages = sortedFiles.pagesBelongChapter.length;
+
+    log('analyze', `Discovered content structure:`, 'info');
+    log('analyze', `  • ${sortedFiles.shelves.length} shelves (spaces)`, 'info');
+    log('analyze', `  • ${sortedFiles.books.length} books`, 'info');
+    log('analyze', `  • ${totalChapters} chapters`, 'info');
+    log('analyze', `  • ${standalonePages} standalone pages`, 'info');
+    log('analyze', `  • ${chapterPages} chapter pages`, 'info');
+    log('analyze', `  • ${totalPages} total pages`, 'info');
+
+    if (reporter) {
+      reporter.complete({ phase: 'analyze', message: 'Analysis complete' });
+    }
 
     const runImportSteps = async () => {
-      if (reporter) reporter.progress({ phase: 'import', message: 'Creating shelves...' });
+      // Stage 2: Shelves
+      currentPhase = 'shelves';
+      if (reporter) {
+        reporter.start({ phase: 'shelves', message: `Creating ${sortedFiles.shelves.length} shelves...` });
+        reporter.progress({ phase: 'shelves', message: 'Creating shelves...', current: 0, total: sortedFiles.shelves.length, counters: { shelves: 0, books: 0, chapters: 0, pages: 0 } });
+      }
       await createShelves();
-      log('import', `Created ${shelves.length} shelves`, 'success');
+      log('shelves', `✓ Created ${shelves.length} shelves`, 'success');
+      if (reporter) {
+        reporter.complete({ phase: 'shelves', message: `Created ${shelves.length} shelves`, counters: { shelves: shelves.length, books: 0, chapters: 0, pages: 0 } });
+      }
 
-      if (reporter) reporter.progress({ phase: 'import', message: 'Creating books...' });
+      // Stage 3: Books
+      currentPhase = 'books';
+      if (reporter) {
+        reporter.start({ phase: 'books', message: `Creating ${sortedFiles.books.length} books...` });
+        reporter.progress({ phase: 'books', message: 'Creating books...', current: 0, total: sortedFiles.books.length });
+      }
       await createBooks();
-      log('import', `Created ${bookCreatedCount} books`, 'success');
+      log('books', `✓ Created ${bookCreatedCount} books`, 'success');
 
-      if (reporter) reporter.progress({ phase: 'import', message: 'Putting books on shelves...' });
+      if (reporter) reporter.progress({ phase: 'books', message: 'Organizing books on shelves...' });
       await putBooksOnShelves();
-      log('import', 'Books placed on shelves', 'success');
+      log('books', '✓ Books organized on shelves', 'success');
+      if (reporter) {
+        reporter.complete({ phase: 'books', message: `Created ${bookCreatedCount} books`, counters: { shelves: shelves.length, books: bookCreatedCount, chapters: 0, pages: 0 } });
+      }
 
-      if (reporter) reporter.progress({ phase: 'import', message: 'Creating chapters...' });
+      // Stage 4: Chapters
+      currentPhase = 'chapters';
+      if (reporter) {
+        reporter.start({ phase: 'chapters', message: `Creating ${totalChapters} chapters...` });
+        reporter.progress({ phase: 'chapters', message: 'Creating chapters...', current: 0, total: totalChapters });
+      }
       await createChapters();
-      log('import', `Created ${chapterCreatedCount} chapters`, 'success');
+      log('chapters', `✓ Created ${chapterCreatedCount} chapters`, 'success');
+      if (reporter) {
+        reporter.complete({ phase: 'chapters', message: `Created ${chapterCreatedCount} chapters`, counters: { shelves: shelves.length, books: bookCreatedCount, chapters: chapterCreatedCount, pages: 0 } });
+      }
 
-      if (reporter) reporter.progress({ phase: 'import', message: 'Creating standalone pages...' });
-      await createPages(sortedFiles.pagesBelongBook);
-      log('import', 'Standalone pages created', 'success');
+      // Stage 5: Pages
+      currentPhase = 'pages';
+      if (reporter) {
+        reporter.start({ phase: 'pages', message: `Creating ${totalPages} pages...` });
+      }
 
-      if (reporter) reporter.progress({ phase: 'import', message: 'Creating pages in chapters...' });
-      await createPages(sortedFiles.pagesBelongChapter);
-      log('import', 'Chapter pages created', 'success');
+      // Standalone pages
+      if (standalonePages > 0) {
+        log('pages', `Creating ${standalonePages} standalone pages...`, 'info');
+        if (reporter) reporter.progress({ phase: 'pages', message: `Creating standalone pages (0/${standalonePages})...`, current: 0, total: totalPages });
+        await createPages(sortedFiles.pagesBelongBook);
+        log('pages', `✓ Created ${standalonePages} standalone pages`, 'success');
+      }
+
+      // Chapter pages
+      if (chapterPages > 0) {
+        log('pages', `Creating ${chapterPages} chapter pages...`, 'info');
+        if (reporter) reporter.progress({ phase: 'pages', message: `Creating chapter pages (0/${chapterPages})...`, current: standalonePages, total: totalPages });
+        await createPages(sortedFiles.pagesBelongChapter);
+        log('pages', `✓ Created ${chapterPages} chapter pages`, 'success');
+      }
+
+      log('pages', `✓ Total pages created: ${pageCreatedCount}`, 'success');
+      if (reporter) {
+        reporter.complete({ phase: 'pages', message: `Created ${pageCreatedCount} pages`, counters: { shelves: shelves.length, books: bookCreatedCount, chapters: chapterCreatedCount, pages: pageCreatedCount } });
+      }
 
       await handleRetry();
       handleAttachments();
-
-      if (reporter) {
-        reporter.complete({
-          phase: 'import',
-          message: 'Import complete',
-          counters: {
-            shelves: shelves.length,
-            books: bookCreatedCount,
-            chapters: chapterCreatedCount,
-            pages: pageCreatedCount,
-          }
-        });
-      }
 
       resolve({
         shelves: shelves.length,
