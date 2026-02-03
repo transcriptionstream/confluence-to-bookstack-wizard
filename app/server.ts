@@ -357,18 +357,32 @@ async function extractZipFileWithProgress(
   }
 }
 
-// Get shelves from BookStack
+// Get shelves from BookStack (paginated)
 async function getShelves(config: { url: string; id: string; secret: string }): Promise<{ shelves: any[]; error?: string }> {
   try {
     const axios = require('axios');
-    const response = await axios.get(`${config.url}/shelves`, {
-      headers: {
-        'Authorization': `Token ${config.id}:${config.secret}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: 10000,
-    });
-    return { shelves: response.data.data || [] };
+    let allShelves: any[] = [];
+    let offset = 0;
+    const limit = 100;
+
+    while (true) {
+      const response = await axios.get(`${config.url}/shelves`, {
+        headers: {
+          'Authorization': `Token ${config.id}:${config.secret}`,
+          'Content-Type': 'application/json',
+        },
+        params: { offset, count: limit },
+        timeout: 30000,
+      });
+
+      const shelves = response.data.data || [];
+      allShelves = allShelves.concat(shelves);
+
+      if (shelves.length < limit) break;
+      offset += limit;
+    }
+
+    return { shelves: allShelves };
   } catch (err: any) {
     const message = err.response?.data?.message || err.message || 'Failed to fetch shelves';
     console.error('[Shelves] Error:', message);
@@ -392,18 +406,32 @@ async function deleteShelf(config: { url: string; id: string; secret: string }, 
   }
 }
 
-// Get books from BookStack
+// Get books from BookStack (paginated)
 async function getBooks(config: { url: string; id: string; secret: string }): Promise<{ books: any[]; error?: string }> {
   try {
     const axios = require('axios');
-    const response = await axios.get(`${config.url}/books`, {
-      headers: {
-        'Authorization': `Token ${config.id}:${config.secret}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: 10000,
-    });
-    return { books: response.data.data || [] };
+    let allBooks: any[] = [];
+    let offset = 0;
+    const limit = 100;
+
+    while (true) {
+      const response = await axios.get(`${config.url}/books`, {
+        headers: {
+          'Authorization': `Token ${config.id}:${config.secret}`,
+          'Content-Type': 'application/json',
+        },
+        params: { offset, count: limit },
+        timeout: 30000,
+      });
+
+      const books = response.data.data || [];
+      allBooks = allBooks.concat(books);
+
+      if (books.length < limit) break;
+      offset += limit;
+    }
+
+    return { books: allBooks };
   } catch (err: any) {
     const message = err.response?.data?.message || err.message || 'Failed to fetch books';
     console.error('[Books] Error:', message);
