@@ -1076,6 +1076,17 @@ function updatePipelineProgress() {
 // Content Modal
 // ============================================
 async function showContentModal() {
+  // Save current form credentials so the server can use them for API calls
+  const config = {
+    url: elements.bookstackUrl.value,
+    id: elements.apiId.value,
+    secret: elements.apiSecret.value,
+    path: elements.importPath.value,
+  };
+  if (config.url && config.id && config.secret) {
+    await api.saveConfig(config);
+  }
+
   elements.contentModal.classList.remove('hidden');
   lucide.createIcons({ nodes: [elements.contentModal] });
   loadContentForTab();
