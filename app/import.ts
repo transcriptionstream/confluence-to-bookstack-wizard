@@ -272,6 +272,22 @@ const replaceBreadcrumbsAndLinks = (dom: any, breadcrumbs: HTMLElement, filename
       const attachmentInfo = getAttachmentInfo(link, pageId)
 
       if (attachmentInfo.localHref) {
+        // Replace the Confluence attachment link with a clean <a> tag that BookStack
+        // won't strip. BookStack's HTML sanitizer removes <span class="confluence-embedded-file-wrapper">
+        // and its contents entirely, so we must unwrap the link from the wrapper span
+        // and strip all Confluence-specific classes/attributes.
+        const cleanLink = dom.window.document.createElement('a')
+        cleanLink.setAttribute('href', `[ATTACHMENT:${attachmentInfo.name}]`)
+        cleanLink.textContent = attachmentInfo.name
+
+        // Unwrap from confluence-embedded-file-wrapper span if present
+        const wrapperSpan = allLinks[i].closest('.confluence-embedded-file-wrapper')
+        if (wrapperSpan && wrapperSpan.parentNode) {
+          wrapperSpan.parentNode.replaceChild(cleanLink, wrapperSpan)
+        } else {
+          allLinks[i].parentNode.replaceChild(cleanLink, allLinks[i])
+        }
+
         const existingRecord = attachmentsByPage[pageId]
         if (existingRecord) {
           const obj = {
