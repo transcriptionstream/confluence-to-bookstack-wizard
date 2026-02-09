@@ -8,17 +8,28 @@ const fs = require( 'fs' );
 const { AxiosAdapter } = require('../axiosAdapter.js');
 const jsdom = require("jsdom");
 
-const fileDirectory = process.env.PATH_TO_HTML
+let fileDirectory = process.env.PATH_TO_HTML
 let subDirectory
 let timeoutBetweenPages = 600
 
-const credentials = {
+let credentials = {
   "url": process.env.URL,
   "id": process.env.ID,
   "secret": process.env.SECRET
 };
 
-const axios = new AxiosAdapter(credentials.url, credentials.id, credentials.secret)
+let axios = new AxiosAdapter(credentials.url, credentials.id, credentials.secret)
+
+function reloadEnvConfig() {
+  require('dotenv').config({ override: true });
+  fileDirectory = process.env.PATH_TO_HTML;
+  credentials = {
+    "url": process.env.URL,
+    "id": process.env.ID,
+    "secret": process.env.SECRET
+  };
+  axios = new AxiosAdapter(credentials.url, credentials.id, credentials.secret);
+}
 
 let shelves = []
 let books = []
@@ -939,6 +950,7 @@ if (process.argv[3] === 'fixLinks') {
 
 // Exported function for web interface
 export async function runImport(folder: string, reporter?: any): Promise<{ shelves: number; books: number; chapters: number; pages: number }> {
+  reloadEnvConfig();
   subDirectory = folder;
   currentReporter = reporter;
   currentPhase = 'import';

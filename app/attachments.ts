@@ -3,7 +3,7 @@ const fs = require( 'fs' );
 const path = require('path');
 const { AxiosAdapter } = require('../axiosAdapter.js');
 
-const fileDirectory = process.env.PATH_TO_HTML
+let fileDirectory = process.env.PATH_TO_HTML
 let subDirectory
 let notAttached = []
 
@@ -20,13 +20,24 @@ const getFilePath = (filename) => {
   return `${fileDirectory}/${subDirectory}/${filename}`
 }
 
-const credentials = {
+let credentials = {
   "url": process.env.URL,
   "id": process.env.ID,
   "secret": process.env.SECRET
 };
 
-const axios = new AxiosAdapter(credentials.url, credentials.id, credentials.secret)
+let axios = new AxiosAdapter(credentials.url, credentials.id, credentials.secret)
+
+function reloadEnvConfig() {
+  require('dotenv').config({ override: true });
+  fileDirectory = process.env.PATH_TO_HTML;
+  credentials = {
+    "url": process.env.URL,
+    "id": process.env.ID,
+    "secret": process.env.SECRET
+  };
+  axios = new AxiosAdapter(credentials.url, credentials.id, credentials.secret);
+}
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -123,6 +134,7 @@ if (process.argv[3] === 'attach') {
 
 // Exported function for web interface
 export async function runAttachments(folder: string, reporter?: any): Promise<{ uploaded: number; failed: number }> {
+  reloadEnvConfig();
   subDirectory = folder;
   notAttached = [];
 
