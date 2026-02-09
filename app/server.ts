@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -6,8 +8,6 @@ import { jobManager } from './job-manager';
 import { runImport } from './import';
 import { runXmlImport } from './xml-import';
 import { runAttachments } from './attachments';
-
-require('dotenv').config();
 const AdmZip = require('adm-zip');
 
 const PORT = parseInt(process.env.WEB_PORT || '3456', 10);
