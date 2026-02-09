@@ -158,16 +158,59 @@ async function main() {
   console.log(`\x1b[32m Total placeholders removed: ${totalRemovals} \x1b[0m`);
 }
 
-main().catch(err => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+// CLI execution
+if (require.main === module) {
+  main().catch(err => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
+}
 
 // Exported function for web interface
 async function runRemoveConfluencePlaceholders(reporter) {
   if (reporter) reporter.start({ phase: 'cleanup:placeholders', message: 'Removing Confluence placeholders...' });
-  // This runs the same logic as main() but with optional reporting
-  if (reporter) reporter.complete({ phase: 'cleanup:placeholders', message: 'Placeholder removal complete' });
+
+  const pages = await getAllPages();
+
+  let totalRemovals = 0;
+  let pagesUpdated = 0;
+
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i];
+
+    try {
+      const pageDetails = await getPageDetails(page.id);
+      const html = pageDetails.html || '';
+
+      if (!html.includes('download/resources/') && !html.includes('download/thumbnails/')) {
+        continue;
+      }
+
+      const { updatedHtml, removals } = removePlaceholders(html);
+
+      if (removals > 0 && updatedHtml !== html) {
+        await updatePageHtml(page.id, updatedHtml, pageDetails.name, pageDetails.book_id);
+        totalRemovals += removals;
+        pagesUpdated++;
+
+        if (reporter) {
+          reporter.progress({
+            phase: 'cleanup:placeholders',
+            message: `Cleaned "${page.name}": ${removals} placeholders removed`,
+            current: i + 1,
+            total: pages.length
+          });
+        }
+      }
+
+      await sleep(BASE_DELAY);
+    } catch (err) {
+      if (reporter) reporter.warning({ phase: 'cleanup:placeholders', message: `Error on "${page.name}": ${err.message}` });
+    }
+  }
+
+  if (reporter) reporter.complete({ phase: 'cleanup:placeholders', message: `Removed ${totalRemovals} placeholders from ${pagesUpdated} pages` });
+  return { removed: totalRemovals, pages: pagesUpdated };
 }
 
 module.exports = { runRemoveConfluencePlaceholders };

@@ -264,16 +264,68 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+// CLI execution
+if (require.main === module) {
+  main().catch(err => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
+}
 
 // Exported function for web interface
 async function runFixEmbeddedImages(subDirectory, reporter) {
   if (reporter) reporter.start({ phase: 'cleanup:images', message: 'Fixing embedded images...' });
-  // This runs the same logic as main() but with optional reporting
-  if (reporter) reporter.complete({ phase: 'cleanup:images', message: 'Embedded image fixing complete' });
+
+  const pathMap = buildPathMapping(subDirectory);
+
+  if (Object.keys(pathMap).length === 0) {
+    if (reporter) reporter.warning({ phase: 'cleanup:images', message: 'No path mappings found' });
+    return { fixed: 0, pages: 0 };
+  }
+
+  const attachments = await getAllAttachments();
+  const attachmentLookup = buildAttachmentLookup(attachments);
+  const pages = await getAllPages();
+
+  let totalReplacements = 0;
+  let pagesUpdated = 0;
+
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i];
+
+    try {
+      const pageDetails = await getPageDetails(page.id);
+      const html = pageDetails.html || '';
+
+      if (!html.includes('src="attachments/') && !html.includes("src='attachments/")) {
+        continue;
+      }
+
+      const { updatedHtml, replacements } = fixEmbeddedImagesInHtml(html, pathMap, attachmentLookup);
+
+      if (updatedHtml !== html) {
+        await updatePageHtml(page.id, updatedHtml, pageDetails.name, pageDetails.book_id);
+        totalReplacements += replacements;
+        pagesUpdated++;
+
+        if (reporter) {
+          reporter.progress({
+            phase: 'cleanup:images',
+            message: `Fixed ${replacements} images in "${page.name}"`,
+            current: i + 1,
+            total: pages.length
+          });
+        }
+      }
+
+      await sleep(BASE_DELAY);
+    } catch (err) {
+      if (reporter) reporter.warning({ phase: 'cleanup:images', message: `Error on "${page.name}": ${err.message}` });
+    }
+  }
+
+  if (reporter) reporter.complete({ phase: 'cleanup:images', message: `Fixed ${totalReplacements} embedded images in ${pagesUpdated} pages` });
+  return { fixed: totalReplacements, pages: pagesUpdated };
 }
 
 module.exports = { runFixEmbeddedImages };

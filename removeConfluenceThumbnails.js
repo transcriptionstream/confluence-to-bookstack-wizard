@@ -187,16 +187,63 @@ async function main() {
   console.log(`\x1b[32m Total items removed: ${totalRemovals} \x1b[0m`);
 }
 
-main().catch(err => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+// CLI execution
+if (require.main === module) {
+  main().catch(err => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
+}
 
-// Exported function for web interface  
+// Exported function for web interface
 async function runRemoveConfluenceThumbnails(reporter) {
   if (reporter) reporter.start({ phase: 'cleanup:thumbnails', message: 'Removing Confluence thumbnails...' });
-  // This runs the same logic as main() but with optional reporting
-  if (reporter) reporter.complete({ phase: 'cleanup:thumbnails', message: 'Thumbnail removal complete' });
+
+  const pages = await getAllPages();
+
+  let totalRemovals = 0;
+  let pagesUpdated = 0;
+
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i];
+
+    try {
+      const pageDetails = await getPageDetails(page.id);
+      const html = pageDetails.html || '';
+
+      if (!html.includes('rest/documentConversion') &&
+          !html.includes('emoticon') &&
+          !html.includes('images/icons/') &&
+          !html.includes('status-macro') &&
+          !html.includes('confluence-embedded-file')) {
+        continue;
+      }
+
+      const { updatedHtml, removals } = removeConfluenceThumbnails(html);
+
+      if (removals > 0 && updatedHtml !== html) {
+        await updatePageHtml(page.id, updatedHtml, pageDetails.name, pageDetails.book_id);
+        totalRemovals += removals;
+        pagesUpdated++;
+
+        if (reporter) {
+          reporter.progress({
+            phase: 'cleanup:thumbnails',
+            message: `Cleaned "${page.name}": ${removals} items removed`,
+            current: i + 1,
+            total: pages.length
+          });
+        }
+      }
+
+      await sleep(BASE_DELAY);
+    } catch (err) {
+      if (reporter) reporter.warning({ phase: 'cleanup:thumbnails', message: `Error on "${page.name}": ${err.message}` });
+    }
+  }
+
+  if (reporter) reporter.complete({ phase: 'cleanup:thumbnails', message: `Removed ${totalRemovals} thumbnails/icons from ${pagesUpdated} pages` });
+  return { removed: totalRemovals, pages: pagesUpdated };
 }
 
 module.exports = { runRemoveConfluenceThumbnails };
