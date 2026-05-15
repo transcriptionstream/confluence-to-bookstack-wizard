@@ -1,5 +1,5 @@
 require('dotenv').config();
-const Axios = require('axios');
+const { AxiosAdapter } = require('./axiosAdapter.js');
 
 const credentials = {
   url: process.env.URL,
@@ -7,80 +7,12 @@ const credentials = {
   secret: process.env.SECRET
 };
 
-const client = Axios.create({
-  baseURL: credentials.url,
-  headers: {
-    'Authorization': `Token ${credentials.id}:${credentials.secret}`,
-    'Content-Type': 'application/json'
-  }
-});
+const axios = new AxiosAdapter(credentials.url, credentials.id, credentials.secret);
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Rate limiting configuration
 const BASE_DELAY = 300; // Base delay between requests (ms)
-const MAX_RETRIES = 5;
-const BACKOFF_MULTIPLIER = 2;
-
-// Wrapper for API calls with retry logic for 429 errors
-async function withRetry(fn, context = '') {
-  let lastError;
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const result = await fn();
-      return result;
-    } catch (err) {
-      lastError = err;
-      if (err.response && err.response.status === 429) {
-        const delay = BASE_DELAY * Math.pow(BACKOFF_MULTIPLIER, attempt);
-        console.log(`\x1b[33m Rate limited${context ? ` (${context})` : ''}, waiting ${delay}ms (attempt ${attempt}/${MAX_RETRIES}) \x1b[0m`);
-        await sleep(delay);
-      } else {
-        throw err; // Re-throw non-429 errors immediately
-      }
-    }
-  }
-  throw lastError; // Throw after all retries exhausted
-}
-
-async function getAllPages() {
-  let allPages = [];
-  let offset = 0;
-  const limit = 100;
-
-  while (true) {
-    const response = await withRetry(
-      () => client.get('/pages', { params: { offset, count: limit } }),
-      'getAllPages'
-    );
-
-    const pages = response.data.data;
-    allPages = allPages.concat(pages);
-
-    if (pages.length < limit) break;
-    offset += limit;
-    await sleep(BASE_DELAY);
-  }
-
-  console.log(`Found ${allPages.length} pages`);
-  return allPages;
-}
-
-async function getPageDetails(pageId) {
-  const response = await withRetry(
-    () => client.get(`/pages/${pageId}`),
-    `getPage:${pageId}`
-  );
-  return response.data;
-}
-
-async function updatePageHtml(pageId, html, name, bookId) {
-  const response = await withRetry(
-    () => client.put(`/pages/${pageId}`, { html, name, book_id: bookId }),
-    `updatePage:${pageId}`
-  );
-  return response.data;
-}
 
 function removePlaceholders(html) {
   let updatedHtml = html;
@@ -114,7 +46,7 @@ function removePlaceholders(html) {
 async function main() {
   console.log('Starting Confluence placeholder cleanup...\n');
 
-  const pages = await getAllPages();
+  const pages = await axios.getAllPages();
 
   let totalRemovals = 0;
   let pagesUpdated = 0;
@@ -124,7 +56,7 @@ async function main() {
     pagesChecked++;
 
     try {
-      const pageDetails = await getPageDetails(page.id);
+      const pageDetails = await axios.getPageDetails(page.id);
       const html = pageDetails.html || '';
 
       // Check if page has potential placeholder images
@@ -138,7 +70,7 @@ async function main() {
       const { updatedHtml, removals } = removePlaceholders(html);
 
       if (removals > 0 && updatedHtml !== html) {
-        await updatePageHtml(page.id, updatedHtml, pageDetails.name, pageDetails.book_id);
+        await axios.updatePageHtml(page.id, updatedHtml, pageDetails.name);
         totalRemovals += removals;
         pagesUpdated++;
         console.log(`\x1b[32m [${pagesChecked}/${pages.length}] Cleaned "${page.name}": ${removals} placeholders removed \x1b[0m`);
@@ -167,10 +99,10 @@ if (require.main === module) {
 }
 
 // Exported function for web interface
-async function runRemoveConfluencePlaceholders(reporter) {
+async function runRemoveConfluencePlaceholders(reporter, shelfId) {
   if (reporter) reporter.start({ phase: 'cleanup:placeholders', message: 'Removing Confluence placeholders...' });
 
-  const pages = await getAllPages();
+  const pages = await (shelfId ? axios.getAllPagesByShelf(shelfId) : axios.getAllPages());
 
   let totalRemovals = 0;
   let pagesUpdated = 0;
@@ -179,17 +111,25 @@ async function runRemoveConfluencePlaceholders(reporter) {
     const page = pages[i];
 
     try {
-      const pageDetails = await getPageDetails(page.id);
+      const pageDetails = await axios.getPageDetails(page.id);
       const html = pageDetails.html || '';
 
       if (!html.includes('download/resources/') && !html.includes('download/thumbnails/')) {
+        if (reporter) {
+          reporter.progress({
+            phase: 'cleanup:placeholders',
+            message: `Skipped "${page.name}"`,
+            current: i + 1,
+            total: pages.length
+          });
+        }
         continue;
       }
 
       const { updatedHtml, removals } = removePlaceholders(html);
 
       if (removals > 0 && updatedHtml !== html) {
-        await updatePageHtml(page.id, updatedHtml, pageDetails.name, pageDetails.book_id);
+        await axios.updatePageHtml(page.id, updatedHtml, pageDetails.name);
         totalRemovals += removals;
         pagesUpdated++;
 
@@ -197,6 +137,15 @@ async function runRemoveConfluencePlaceholders(reporter) {
           reporter.progress({
             phase: 'cleanup:placeholders',
             message: `Cleaned "${page.name}": ${removals} placeholders removed`,
+            current: i + 1,
+            total: pages.length
+          });
+        }
+      } else {
+        if (reporter) {
+          reporter.progress({
+            phase: 'cleanup:placeholders',
+            message: `Cannot fix "${page.name}"`,
             current: i + 1,
             total: pages.length
           });

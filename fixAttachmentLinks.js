@@ -1,5 +1,5 @@
 require('dotenv').config();
-const Axios = require('axios');
+const { AxiosAdapter } = require('./axiosAdapter.js');
 const path = require('path');
 
 const credentials = {
@@ -8,13 +8,7 @@ const credentials = {
   secret: process.env.SECRET
 };
 
-const client = Axios.create({
-  baseURL: credentials.url,
-  headers: {
-    'Authorization': `Token ${credentials.id}:${credentials.secret}`,
-    'Content-Type': 'application/json'
-  }
-});
+const axios = new AxiosAdapter(credentials.url, credentials.id, credentials.secret);
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -29,28 +23,6 @@ function loadAttachmentRecords() {
 
 // Rate limiting configuration
 const BASE_DELAY = 300;
-const MAX_RETRIES = 5;
-const BACKOFF_MULTIPLIER = 2;
-
-async function withRetry(fn, context = '') {
-  let lastError;
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const result = await fn();
-      return result;
-    } catch (err) {
-      lastError = err;
-      if (err.response && err.response.status === 429) {
-        const delay = BASE_DELAY * Math.pow(BACKOFF_MULTIPLIER, attempt);
-        console.log(`\x1b[33m Rate limited${context ? ` (${context})` : ''}, waiting ${delay}ms (attempt ${attempt}/${MAX_RETRIES}) \x1b[0m`);
-        await sleep(delay);
-      } else {
-        throw err;
-      }
-    }
-  }
-  throw lastError;
-}
 
 function buildPathMapping(subDirectory) {
   const attachmentRecords = loadAttachmentRecords();
@@ -76,73 +48,11 @@ function buildPathMapping(subDirectory) {
   return pathMap;
 }
 
-async function getAllAttachments() {
-  let allAttachments = [];
-  let offset = 0;
-  const limit = 100;
-
-  while (true) {
-    const response = await withRetry(
-      () => client.get('/attachments', { params: { offset, count: limit } }),
-      'getAllAttachments'
-    );
-
-    const attachments = response.data.data;
-    allAttachments = allAttachments.concat(attachments);
-
-    if (attachments.length < limit) break;
-    offset += limit;
-    await sleep(BASE_DELAY);
-  }
-
-  console.log(`Found ${allAttachments.length} attachments in BookStack`);
-  return allAttachments;
-}
-
-async function getAllPages() {
-  let allPages = [];
-  let offset = 0;
-  const limit = 100;
-
-  while (true) {
-    const response = await withRetry(
-      () => client.get('/pages', { params: { offset, count: limit } }),
-      'getAllPages'
-    );
-
-    const pages = response.data.data;
-    allPages = allPages.concat(pages);
-
-    if (pages.length < limit) break;
-    offset += limit;
-    await sleep(BASE_DELAY);
-  }
-
-  console.log(`Found ${allPages.length} pages in BookStack`);
-  return allPages;
-}
-
-async function getPageDetails(pageId) {
-  const response = await withRetry(
-    () => client.get(`/pages/${pageId}`),
-    `getPage:${pageId}`
-  );
-  return response.data;
-}
-
-async function updatePageHtml(pageId, html, name, bookId) {
-  const response = await withRetry(
-    () => client.put(`/pages/${pageId}`, { html, name, book_id: bookId }),
-    `updatePage:${pageId}`
-  );
-  return response.data;
-}
-
 function buildAttachmentLookup(attachments) {
   const lookup = {};
   for (const att of attachments) {
     const key = `${att.uploaded_to}:${att.name.toLowerCase()}`;
-    lookup[key] = att.id;
+    lookup[key] = att.path || `/attachments/${att.id}`; // path for image; id for attachment
   }
   console.log(`Built attachment lookup with ${Object.keys(lookup).length} entries`);
   // Log a sample of keys for debugging
@@ -162,11 +72,13 @@ function fixAttachmentLinksInHtml(html, pathMap, attachmentLookup, currentPageId
   const attachmentLinkRegex = /href=["'](attachments\/\d+\/[^"']+)["']/gi;
 
   // Match placeholder format with various encodings:
+  // href for attachment; src for image-gallery
   // - Raw: href="[ATTACHMENT:filename]"
-  // - URL-encoded: href="%5BATTACHMENT:filename%5D"
-  // - HTML-encoded: href="&#91;ATTACHMENT:filename&#93;"
-  // - Mixed: href="[ATTACHMENT:filename%5D"
-  const placeholderRegex = /href=["'](?:\[|%5[Bb]|&#91;|&#x5[Bb];)ATTACHMENT:([^\]"']+?)(?:\]|%5[Dd]|&#93;|&#x5[Dd];)["']/gi;
+  // - URL-encoded: href="%5BATTACHMENT%3Afilename%5D"
+  // - HTML-encoded: href="&#91;ATTACHMENT&#58;filename&#93;"
+  // - Mixed: href="[ATTACHMENT&#58;filename%5D"
+  // - With base URL: href="http://127.0.0.1/%5BATTACHMENT%3Afilename%5D"
+  const placeholderRegex = /((?:href|src))=["'](http[^\]"']+?\/)?(?:\[|%5[Bb]|&#91;|&#x5[Bb];)ATTACHMENT(?:\:|%3[Aa]|&#58;|&#x3[Aa];)([^\]"']+?)(?:\]|%5[Dd]|&#93;|&#x5[Dd];)["']/gi;
 
   // Fix old-style attachment paths
   updatedHtml = html.replace(attachmentLinkRegex, (match, oldPath) => {
@@ -180,7 +92,7 @@ function fixAttachmentLinksInHtml(html, pathMap, attachmentLookup, currentPageId
 
       if (attachmentId) {
         replacements++;
-        return `href="/attachments/${attachmentId}"`;
+        return `href="${attachmentId}"`;
       } else {
         notFound.push({ path: oldPath, name, pageNewId, reason: 'no attachment found in BookStack' });
       }
@@ -193,9 +105,10 @@ function fixAttachmentLinksInHtml(html, pathMap, attachmentLookup, currentPageId
 
   // Fix placeholder-style attachment links
   // First try to match on the CURRENT page, then fall back to global search
-  updatedHtml = updatedHtml.replace(placeholderRegex, (match, filename) => {
+  updatedHtml = updatedHtml.replace(placeholderRegex, (match, attrName, baseUrl, filename) => {
     const decodedFilename = decodeURIComponent(filename).trim();
     const filenameLower = decodedFilename.toLowerCase();
+    const output = path => `${attrName}="${path}"`;
 
     console.log(`  [DEBUG] Found placeholder: "${filename}" on page ${currentPageId}`);
 
@@ -206,7 +119,7 @@ function fixAttachmentLinksInHtml(html, pathMap, attachmentLookup, currentPageId
       if (attachmentLookup[currentPageKey]) {
         console.log(`  [DEBUG] ✓ Found on current page: ${attachmentLookup[currentPageKey]}`);
         replacements++;
-        return `href="/attachments/${attachmentLookup[currentPageKey]}"`;
+        return output(attachmentLookup[currentPageKey]);
       }
     }
 
@@ -217,7 +130,7 @@ function fixAttachmentLinksInHtml(html, pathMap, attachmentLookup, currentPageId
       if (attName === filenameLower) {
         console.log(`  [DEBUG] ✓ Found on different page via key "${key}": ${attachmentId}`);
         replacements++;
-        return `href="/attachments/${attachmentId}"`;
+        return output(attachmentId);
       }
     }
 
@@ -231,7 +144,7 @@ function fixAttachmentLinksInHtml(html, pathMap, attachmentLookup, currentPageId
         if (decodedAttName === filenameLower || decodedAttName === decodedFilename.toLowerCase()) {
           console.log(`  [DEBUG] ✓ Found via fuzzy match "${key}": ${attachmentId}`);
           replacements++;
-          return `href="/attachments/${attachmentId}"`;
+          return output(attachmentId);
         }
       } catch (e) {
         // Skip invalid URL encoding
@@ -257,10 +170,11 @@ async function main() {
     return;
   }
 
-  const attachments = await getAllAttachments();
-  const attachmentLookup = buildAttachmentLookup(attachments);
+  const attachments = await axios.getAllAttachments();
+  const images = await axios.getAllImageGallery();
+  const attachmentLookup = buildAttachmentLookup(attachments.concat(images));
 
-  const pages = await getAllPages();
+  const pages = await axios.getAllPages();
 
   let totalReplacements = 0;
   let pagesUpdated = 0;
@@ -271,7 +185,7 @@ async function main() {
     pagesChecked++;
 
     try {
-      const pageDetails = await getPageDetails(page.id);
+      const pageDetails = await axios.getPageDetails(page.id);
       const html = pageDetails.html || '';
 
       if (!html.includes('attachments/') && !html.includes('ATTACHMENT:') && !html.includes('%5BATTACHMENT') && !html.includes('&#91;ATTACHMENT')) {
@@ -285,7 +199,7 @@ async function main() {
       allNotFound = allNotFound.concat(notFound);
 
       if (replacements > 0 && updatedHtml !== html) {
-        await updatePageHtml(page.id, updatedHtml, pageDetails.name, pageDetails.book_id);
+        await axios.updatePageHtml(page.id, updatedHtml, pageDetails.name);
         totalReplacements += replacements;
         pagesUpdated++;
         console.log(`\x1b[32m [${pagesChecked}/${pages.length}] Updated "${page.name}": ${replacements} links fixed \x1b[0m`);
@@ -316,7 +230,7 @@ async function main() {
 }
 
 // Exported function for web interface
-async function runFixAttachmentLinks(subDirectory, reporter) {
+async function runFixAttachmentLinks(subDirectory, reporter, shelfId) {
   if (reporter) reporter.start({ phase: 'cleanup:links', message: 'Fixing attachment links...' });
 
   const pathMap = buildPathMapping(subDirectory);
@@ -326,9 +240,7 @@ async function runFixAttachmentLinks(subDirectory, reporter) {
     return { fixed: 0, pages: 0 };
   }
 
-  const attachments = await getAllAttachments();
-  const attachmentLookup = buildAttachmentLookup(attachments);
-  const pages = await getAllPages();
+  const pages = await (shelfId ? axios.getAllPagesByShelf(shelfId) : axios.getAllPages());
 
   let totalReplacements = 0;
   let pagesUpdated = 0;
@@ -337,17 +249,29 @@ async function runFixAttachmentLinks(subDirectory, reporter) {
     const page = pages[i];
 
     try {
-      const pageDetails = await getPageDetails(page.id);
+      const pageDetails = await axios.getPageDetails(page.id);
       const html = pageDetails.html || '';
 
       if (!html.includes('attachments/') && !html.includes('ATTACHMENT:') && !html.includes('%5BATTACHMENT') && !html.includes('&#91;ATTACHMENT')) {
+        if (reporter) {
+          reporter.progress({
+            phase: 'cleanup:links',
+            message: `Skipped "${page.name}"`,
+            current: i + 1,
+            total: pages.length
+          });
+        }
         continue;
       }
+
+      const attachments = await axios.getPageAttachments(page.id);
+      const images = await axios.getPageImageGallery(page.id);
+      const attachmentLookup = buildAttachmentLookup(attachments.concat(images));
 
       const { updatedHtml, replacements } = fixAttachmentLinksInHtml(html, pathMap, attachmentLookup, page.id);
 
       if (replacements > 0 && updatedHtml !== html) {
-        await updatePageHtml(page.id, updatedHtml, pageDetails.name, pageDetails.book_id);
+        await axios.updatePageHtml(page.id, updatedHtml, pageDetails.name);
         totalReplacements += replacements;
         pagesUpdated++;
 
@@ -355,6 +279,15 @@ async function runFixAttachmentLinks(subDirectory, reporter) {
           reporter.progress({
             phase: 'cleanup:links',
             message: `Fixed ${replacements} links in "${page.name}"`,
+            current: i + 1,
+            total: pages.length
+          });
+        }
+      } else {
+        if (reporter) {
+          reporter.progress({
+            phase: 'cleanup:links',
+            message: `Cannot fix "${page.name}"`,
             current: i + 1,
             total: pages.length
           });

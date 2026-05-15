@@ -49,13 +49,15 @@ const nuke = async () => {
       })
   })
 
-  Promise.all([...shelfPromises, ...bookPromises])
-    .then(() => {
-      console.log('Nuked!')
-    })
-    .catch((err) => {
-      console.log('Nuke failed. Try again.')
-    })
+  try {
+    console.log('Deleting shelves and books');
+    await Promise.all([...shelfPromises, ...bookPromises]);
+    console.log('Deleted shelves and books');
+    await axios.clearRecycleBin();
+    console.log('Nuked!')
+  } catch (err) {
+    console.log('Nuke failed. Try again.', err)
+  }
 }
 
 nuke()

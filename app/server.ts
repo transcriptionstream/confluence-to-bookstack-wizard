@@ -573,26 +573,35 @@ async function runImportJob(jobId: string, folder: string, exportType: string, r
     const attachResult = await runAttachments(folder, reporter);
 
     // Run cleanup scripts
-    const { runFixAttachmentLinks } = require('../fixAttachmentLinks.js');
-    const { runFixEmbeddedImages } = require('../fixEmbeddedImages.js');
-    const { runRemoveConfluencePlaceholders } = require('../removeConfluencePlaceholders.js');
-    const { runRemoveConfluenceThumbnails } = require('../removeConfluenceThumbnails.js');
-
     reporter.start({ phase: 'cleanup', message: 'Running cleanup scripts...' });
     reporter.log('cleanup', 'Starting post-import cleanup...', 'info');
 
     try {
+      const { runFixAttachmentLinks } = require('../fixAttachmentLinks.js');
       reporter.log('cleanup', 'Fixing attachment links...', 'info');
-      await runFixAttachmentLinks(folder, reporter);
+      await runFixAttachmentLinks(folder, reporter, result.shelfId);
       reporter.log('cleanup', '✓ Attachment links fixed', 'success');
     } catch (err: any) {
       reporter.log('cleanup', `⚠ Attachment link fixing failed: ${err.message}`, 'warning');
       console.error('Attachment link fix error:', err);
     }
 
+    if (exportType === 'xml') {
+      try {
+        const { runFixPageLinks } = require('../fixPageLinks.js');
+        reporter.log('cleanup', 'Fixing page links...', 'info');
+        await runFixPageLinks(reporter, result.shelfId);
+        reporter.log('cleanup', '✓ Page links fixed', 'success');
+      } catch (err: any) {
+        reporter.log('cleanup', `⚠ Page links fixing failed: ${err.message}`, 'warning');
+        console.error('Page links fix error:', err);
+      }
+    }
+
     try {
+      const { runRemoveConfluenceThumbnails } = require('../removeConfluenceThumbnails.js');
       reporter.log('cleanup', 'Removing Confluence thumbnails...', 'info');
-      await runRemoveConfluenceThumbnails(reporter);
+      await runRemoveConfluenceThumbnails(reporter, result.shelfId);
       reporter.log('cleanup', '✓ Confluence thumbnails removed', 'success');
     } catch (err: any) {
       reporter.log('cleanup', `⚠ Thumbnail removal failed: ${err.message}`, 'warning');
@@ -600,21 +609,25 @@ async function runImportJob(jobId: string, folder: string, exportType: string, r
     }
 
     try {
+      const { runRemoveConfluencePlaceholders } = require('../removeConfluencePlaceholders.js');
       reporter.log('cleanup', 'Removing Confluence placeholders...', 'info');
-      await runRemoveConfluencePlaceholders(reporter);
+      await runRemoveConfluencePlaceholders(reporter, result.shelfId);
       reporter.log('cleanup', '✓ Confluence placeholders removed', 'success');
     } catch (err: any) {
       reporter.log('cleanup', `⚠ Placeholder removal failed: ${err.message}`, 'warning');
       console.error('Placeholder removal error:', err);
     }
 
-    try {
-      reporter.log('cleanup', 'Fixing embedded images...', 'info');
-      await runFixEmbeddedImages(folder, reporter);
-      reporter.log('cleanup', '✓ Embedded images fixed', 'success');
-    } catch (err: any) {
-      reporter.log('cleanup', `⚠ Embedded image fixing failed: ${err.message}`, 'warning');
-      console.error('Embedded image fix error:', err);
+    if (exportType !== 'xml') {
+      try {
+        const { runFixEmbeddedImages } = require('../fixEmbeddedImages.js');
+        reporter.log('cleanup', 'Fixing embedded images...', 'info');
+        await runFixEmbeddedImages(folder, reporter, result.shelfId);
+        reporter.log('cleanup', '✓ Embedded images fixed', 'success');
+      } catch (err: any) {
+        reporter.log('cleanup', `⚠ Embedded image fixing failed: ${err.message}`, 'warning');
+        console.error('Embedded image fix error:', err);
+      }
     }
 
     // Clear all attachment records now that import is complete

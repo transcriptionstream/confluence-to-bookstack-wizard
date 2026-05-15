@@ -3,7 +3,9 @@ import { attachmentRecords } from '../outputJS/attachmentsFile'
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+const { encode: encodeHtml } = require('html-entities');
 const { AxiosAdapter } = require('../axiosAdapter.js');
+const { SUBPAGE_SEPARATOR } = require('../fixPageLinks.js');
 
 let fileDirectory = process.env.PATH_TO_HTML;
 let subDirectory: string;
@@ -48,14 +50,32 @@ interface BodyContentData {
   contentId: string;
 }
 
+let shelfId: number;
+let spaceTitle: string;
+let spaceKey: string;
 let pages: Map<string, PageData> = new Map();
 let attachments: Map<string, AttachmentData> = new Map();
 let bodyContents: Map<string, BodyContentData> = new Map();
-let attachmentsByPage: { [key: string]: { attachmentHrefs: { name: string; href: string }[]; pageNewId?: number } } = {};
+let attachmentsByPage: {
+  [key: string]: {
+    attachmentHrefs: { name: string; href: string, type?: string }[];
+    pageNewId?: number
+  }
+} = {};
 
 // Simple XML parser - extracts objects from Confluence XML export
 function parseEntitiesXml(xmlContent: string) {
   console.log('Parsing entities.xml...');
+
+  const spaceTitleRegex = /<object class="Space" package="com\.atlassian\.confluence\.spaces">[\s\S]*?<property[^>]*name="name"[^>]*><!\[CDATA\[(.*?)\]\]><\/property>/;
+  let spaceTitleMatch = spaceTitleRegex.exec(xmlContent);
+  if (spaceTitleMatch)
+    spaceTitle = spaceTitleMatch[1];
+
+  const spaceKeyRegex = /<object class="Space" package="com\.atlassian\.confluence\.spaces">[\s\S]*?<property[^>]*name="key"[^>]*><!\[CDATA\[(.*?)\]\]><\/property>/;
+  let spaceKeyMatch = spaceKeyRegex.exec(xmlContent);
+  if (spaceKeyMatch)
+    spaceKey = spaceKeyMatch[1];
 
   // Parse Page objects
   const pageRegex = /<object class="Page" package="com\.atlassian\.confluence\.pages">([\s\S]*?)<\/object>/g;
@@ -147,27 +167,6 @@ function getPageBody(page: PageData): string {
   return '';
 }
 
-// Find attachment file by filename for a given page
-function findAttachmentFile(pageId: string, filename: string): string | null {
-  const pageAttachmentsDir = path.join(fileDirectory, subDirectory, 'attachments', pageId);
-
-  if (!fs.existsSync(pageAttachmentsDir)) {
-    return null;
-  }
-
-  // Look through attachments for this page
-  for (const [attId, att] of attachments) {
-    if (att.containerId === pageId && att.title === filename) {
-      const filePath = path.join(pageAttachmentsDir, attId, att.version);
-      if (fs.existsSync(filePath)) {
-        return filePath;
-      }
-    }
-  }
-
-  return null;
-}
-
 // Get MIME type from filename
 function getMimeType(filename: string): string {
   const ext = filename.toLowerCase().split('.').pop();
@@ -182,16 +181,11 @@ function getMimeType(filename: string): string {
   return mimeTypes[ext || ''] || 'application/octet-stream';
 }
 
-// Convert image to base64 data URL
-function imageToBase64(filePath: string, filename: string): string | null {
-  try {
-    const data = fs.readFileSync(filePath);
-    const base64 = data.toString('base64');
-    const mimeType = getMimeType(filename);
-    return `data:${mimeType};base64,${base64}`;
-  } catch (err) {
-    return null;
-  }
+async function setAttachmentType(pageId: string, filename: string, type: 'attachment' | 'gallery' | 'drawio') {
+  const { attachmentHrefs } = attachmentsByPage[pageId];
+  const index = attachmentHrefs.findIndex(attach => attach.name === filename);
+  if (index !== -1)
+    attachmentHrefs[index].type = type;
 }
 
 // Convert Confluence storage format to HTML
@@ -201,15 +195,17 @@ function convertStorageToHtml(storageFormat: string, pageId: string): string {
   // Convert ac:image to img tags with base64 embedded images
   html = html.replace(/<ac:image[^>]*>[\s\S]*?<ri:attachment ri:filename="([^"]+)"[^>]*\/>[\s\S]*?<\/ac:image>/g,
     (match, filename) => {
-      const filePath = findAttachmentFile(pageId, filename);
-      if (filePath) {
-        const base64Url = imageToBase64(filePath, filename);
-        if (base64Url) {
-          return `<img src="${base64Url}" alt="${filename}" />`;
-        }
-      }
-      // Fallback to placeholder if image not found
-      return `<p>[Image: ${filename}]</p>`;
+      setAttachmentType(pageId, filename, 'gallery');
+      return `<img src="[ATTACHMENT:${filename}]" alt="${filename}" />`;
+    });
+
+  // Convert drawio macro: (src -> download link) (preview -> base64 embedded images)
+  html = html.replace(/<ac:structured-macro[^>]*ac:name="drawio"[^>]*>[\s\S]*?<ac:parameter ac:name="diagramName">([\s\S]*?)<\/ac:parameter>[\s\S]*?<\/ac:structured-macro>/g,
+    (match, drawioName) => {
+      let drawioSrc = `[draw.io] <a href="[ATTACHMENT:${drawioName}]">${drawioName}</a>`;
+      let filename = drawioName + '.png';
+      setAttachmentType(pageId, filename, 'drawio');
+      return `<p>${drawioSrc}<img src="[ATTACHMENT:${filename}]" alt="${filename}" /></p>`;
     });
 
   // Convert view-file macro to download link
@@ -236,8 +232,70 @@ function convertStorageToHtml(storageFormat: string, pageId: string): string {
       return `<a href="[ATTACHMENT:${filename}]">${filename}</a>`;
     });
 
+  // confluence link
+  html = html.replace(/<ac:link[^>]*>[\s\S]*?<ri:page([^>]*)>[\s\S]*?<ac:link-body>([\s\S]*?)<\/ac:link-body>[\s\S]*?<\/ac:link>/g,
+    (match, pageMeta, title) => {
+      let pageTitle = pageMeta.match(/ri:content-title="([^"]+?)"/)?.[1];
+      let pageSpace = pageMeta.match(/ri:space-key="([^"]+?)"/)?.[1] || spaceKey;
+      return `<a href="[PAGE:${pageSpace}:${pageTitle}]">${title}</a>`;
+    });
+
+  // user (mapping later)
+  html = html.replace(/<ac:link[^>]*>[\s\S]*?<ri:user ri:userkey="([^"]+?)"[^>]*\/>[\s\S]*?<\/ac:link>/g,
+    (match, userkey) => {
+      return `<span style="color: rgb(24, 104, 219);">@[USER:${userkey}]</span>`;
+    });
+
+  // Handle time
+  html = html.replace(/<time datetime="([^"]+?)" \/>/g,
+    (match, datetime) => {
+      return `<span style="background-color: rgb(206, 212, 217);">${datetime}</span>`;
+    });
+
+  // Handle task list
+  html = html.replace(/<ac:task-list>([\s\S]*?)<\/ac:task-list>/g,
+    (match, list) => {
+      return `<ul style="list-style-type: tasklist;">${list}</ul>`;
+    });
+  html = html.replace(/<ac:task>[\s\S]*?<ac:task-status>(.*?)<\/ac:task-status>[\s\S]*?<ac:task-body>([\s\S]*?)<\/ac:task-body>[\s\S]*?<\/ac:task>/g,
+    (match, status, body) => {
+      let checked = status == 'complete' ? ' checked="checked"' : '';
+      return `<li class="task-list-item"><input${checked} disabled="disabled" type="checkbox">${body}</li>`;
+    });
+
+  // Handle code block macro
+  html = html.replace(/<ac:structured-macro[^>]*ac:name="code"[^>]*>[\s\S]*?(<ac:parameter ac:name="language">(.*)<\/ac:parameter>)?[\s\S]*?<ac:plain-text-body><!\[CDATA\[([\s\S]*?)\]\s*\]\s*><\/ac:plain-text-body>[\s\S]*?<\/ac:structured-macro>/g,
+    (match, _, language, code) => {
+      return `<pre><code class="language-${language || ''}">${encodeHtml(code)}</code></pre>`;
+    });
+
+  // Handle status macro
+  html = html.replace(/<ac:structured-macro[^>]*ac:name="status"[^>]*><ac:parameter ac:name="title">(.*?)<\/ac:parameter>(<ac:parameter ac:name="colour">(.*?)<\/ac:parameter>)?<\/ac:structured-macro>/g,
+    (match, title, _, color) => {
+      return `<span style="background-color:${color?.toLowerCase() || 'grey'}">${title}</span>`;
+    });
+
+  // Handle callout macro
+  html = html.replace(/<ac:structured-macro[^>]*ac:name="(?:info|note)"[^>]*>[\s\S]*?<ac:rich-text-body><p>([\s\S]*?)<\/p><\/ac:rich-text-body><\/ac:structured-macro>/g,
+    (match, body) => {
+      return `<p class="callout info">${body}</p>`;
+    });
+  html = html.replace(/<ac:structured-macro[^>]*ac:name="warning"[^>]*>[\s\S]*?<ac:rich-text-body><p>([\s\S]*?)<\/p><\/ac:rich-text-body><\/ac:structured-macro>/g,
+    (match, body) => {
+      return `<p class="callout warning">${body}</p>`;
+    });
+
+  // panel
+  html = html.replace(/<ac:structured-macro[^>]*ac:name="panel"[^>]*>([\s\S]*?)(<ac:parameter ac:name="bgColor">(.*?)<\/ac:parameter>)?([\s\S]*?)<\/ac:structured-macro>/g,
+    (match, body1, _, bgColor, body2) => {
+      return `<table style="background-color:${bgColor?.toLowerCase() || 'grey'}"><tbody><tr><td>${body1}${body2}</td></tr></tbody></table>`;
+    });
+
   // Convert structured macros (just remove them for now or convert to divs)
-  html = html.replace(/<ac:structured-macro[^>]*>[\s\S]*?<\/ac:structured-macro>/g, '');
+  html = html.replace(/<ac:structured-macro[^>]*>([\s\S]*?)<\/ac:structured-macro>/g,
+    (match, body) => {
+      return `<p>${body}</p>`;
+    });
 
   // Remove other ac: elements
   html = html.replace(/<\/?ac:[^>]+>/g, '');
@@ -256,6 +314,35 @@ function buildHierarchy(): Map<string | null, PageData[]> {
       hierarchy.set(parentId, []);
     }
     hierarchy.get(parentId)!.push(page);
+  }
+
+  // remove unlinked pages
+  let rootPages = hierarchy.get(null) || [];
+  rootPages = rootPages.filter(page => hierarchy.has(page.id));
+  hierarchy.set(null, rootPages);
+
+  // flatten subpages
+  for (const mainPage of rootPages) {
+    const books = hierarchy.get(mainPage.id) || [];
+    for (const book of books) {
+      const chapters = hierarchy.get(book.id) || [];
+      for (const chapter of chapters) {
+        let flatPages = [];
+
+        const flatten = function (page: PageData, titlePrefix = '') {
+          const subpages = hierarchy.get(page.id) || [];
+          for (const subpage of subpages) {
+            if (titlePrefix)
+              subpage.title = `${titlePrefix}${SUBPAGE_SEPARATOR}${subpage.title}`;
+            flatPages.push(subpage);
+            flatten(subpage, subpage.title);
+          }
+        }
+
+        flatten(chapter);
+        hierarchy.set(chapter.id, flatPages);
+      }
+    }
   }
 
   return hierarchy;
@@ -301,19 +388,20 @@ function buildAttachmentMapping() {
 }
 
 // Create BookStack structure
-async function createBookStackStructure(reporter?: any): Promise<{ shelves: number; books: number; pages: number }> {
+async function createBookStackStructure(reporter?: any): Promise<{ shelves: number; books: number; chapters: number; pages: number }> {
   const hierarchy = buildHierarchy();
   const rootPages = hierarchy.get(null) || [];
 
   // Running counters for live updates
   let shelfCount = 0;
   let bookCount = 0;
+  let chapterCount = 0;
   let pageCount = 0;
 
   const getCounters = () => ({
     shelves: shelfCount,
     books: bookCount,
-    chapters: 0,
+    chapters: chapterCount,
     pages: pageCount
   });
 
@@ -337,33 +425,33 @@ async function createBookStackStructure(reporter?: any): Promise<{ shelves: numb
     }
   };
 
+  // Create shelf
+  if (reporter) reporter.start({ phase: 'shelves', message: 'Creating shelf...' });
+  progress('shelves', `Creating shelf: ${spaceTitle}`, 0, 1);
+  const shelfResp = await axios.createShelf({
+    name: spaceTitle,
+    tags: [
+      { name: 'space', value: spaceKey },
+    ]
+  });
+  shelfId = shelfResp.data.id;
+  shelfCount++;
+  log(`✓ Created shelf: ${spaceTitle} (ID: ${shelfId})`, 'success');
+  progress('shelves', `Created shelf: ${spaceTitle}`, 1, 1);
+  if (reporter) reporter.complete({ phase: 'shelves', message: `Created shelf: ${spaceTitle}`, counters: getCounters() });
+
   log(`Found ${rootPages.length} root pages`);
 
-  // Find the main space page (usually "Human Resources")
-  let mainPage = rootPages.find(p => p.title.toLowerCase().includes('human resources'));
-  if (!mainPage && rootPages.length > 0) {
-    mainPage = rootPages[0];
-  }
+  // Find the main space page
+  let mainPage = rootPages[0];
 
   if (!mainPage) {
     log('No main page found', 'error');
-    return { shelves: 0, books: 0, pages: 0 };
+    return getCounters();
   }
 
-  log(`Main page: ${mainPage.title}`);
-
-  // Create shelf
-  if (reporter) reporter.start({ phase: 'shelves', message: 'Creating shelf...' });
-  progress('shelves', `Creating shelf: ${mainPage.title}`, 0, 1);
-  const shelfResp = await axios.createShelf({ name: mainPage.title });
-  const shelfId = shelfResp.data.id;
-  shelfCount++;
-  log(`✓ Created shelf: ${mainPage.title} (ID: ${shelfId})`, 'success');
-  progress('shelves', `Created shelf: ${mainPage.title}`, 1, 1);
-  if (reporter) reporter.complete({ phase: 'shelves', message: `Created shelf: ${mainPage.title}`, counters: getCounters() });
-
   // Get child pages (these will be books)
-  const childPages = hierarchy.get(mainPage.id) || [];
+  const childPages = [mainPage, ...(hierarchy.get(mainPage.id) || [])];
   log(`Found ${childPages.length} child pages (will be books)`);
 
   const bookIds: number[] = [];
@@ -385,7 +473,12 @@ async function createBookStackStructure(reporter?: any): Promise<{ shelves: numb
     progress('books', `Creating book ${i + 1}/${totalBooks}: ${childPage.title}`, i, totalBooks);
 
     try {
-      const bookResp = await axios.createBook({ name: childPage.title });
+      const bookResp = await axios.createBook({
+        name: childPage.title,
+        tags: [
+          { name: 'space', value: spaceKey },
+        ]
+      });
       const bookId = bookResp.data.id;
       bookIds.push(bookId);
       bookCount++;
@@ -395,26 +488,33 @@ async function createBookStackStructure(reporter?: any): Promise<{ shelves: numb
 
       // Create general page for the book with its content
       const bodyHtml = getPageBody(childPage);
-      const html = convertStorageToHtml(bodyHtml, childPage.id);
+      if (bodyHtml) { // skip folder
+        const html = convertStorageToHtml(bodyHtml, childPage.id);
 
-      const pageResp = await axios.createPage({
-        book_id: bookId,
-        name: '_General',
-        html: html || '<p></p>'
-      });
-      pageCount++;
+        const pageResp = await axios.createPage({
+          book_id: bookId,
+          name: '_General',
+          html: html || '<p></p>'
+        });
+        pageCount++;
 
-      // Map page ID for attachments
-      if (attachmentsByPage[childPage.id]) {
-        attachmentsByPage[childPage.id].pageNewId = pageResp.data.id;
+        // Map page ID for attachments
+        if (attachmentsByPage[childPage.id]) {
+          attachmentsByPage[childPage.id].pageNewId = pageResp.data.id;
+        }
+
+        log(`  ✓ Created general page for: ${childPage.title}`, 'success');
+        progress('books', `Created general page for: ${childPage.title}`, bookCount, totalBooks);
       }
-
-      log(`  ✓ Created general page for: ${childPage.title}`, 'success');
-      progress('books', `Created general page for: ${childPage.title}`, bookCount, totalBooks);
-
     } catch (err: any) {
       log(`✗ Error creating book ${childPage.title}: ${err.message}`, 'error');
     }
+  }
+
+  // Assign books to shelf
+  if (bookIds.length > 0) {
+    await axios.updateShelf(shelfId, { books: bookIds });
+    log(`✓ Assigned ${bookIds.length} books to shelf`, 'success');
   }
 
   if (reporter) reporter.complete({ phase: 'books', message: `Created ${bookCount} books`, counters: getCounters() });
@@ -423,9 +523,37 @@ async function createBookStackStructure(reporter?: any): Promise<{ shelves: numb
   if (reporter) reporter.start({ phase: 'pages', message: `Creating ${totalPages} pages...` });
   progress('pages', `Creating ${totalPages} pages...`, 0, totalPages);
 
+  const createPage = async function (page: PageData, params: { [key: string]: any }) {
+    try {
+      const pageBodyHtml = getPageBody(page);
+      if (!pageBodyHtml) return false; // skip folder
+
+      const pageHtml = convertStorageToHtml(pageBodyHtml, page.id);
+
+      const pageResp = await axios.createPage({
+        name: page.title,
+        html: pageHtml || '<p></p>',
+        ...params,
+      });
+      pageCount++;
+
+      if (attachmentsByPage[page.id]) {
+        attachmentsByPage[page.id].pageNewId = pageResp.data.id;
+      }
+
+      log(`  ✓ Created page: ${page.title}`, 'success');
+      return true;
+    } catch (err: any) {
+      log(`  ✗ Error creating page ${page.title}: ${err.message}`, 'error');
+      return false;
+    }
+  }
+
   let currentPageIndex = 0;
   for (let i = 0; i < childPages.length; i++) {
     const childPage = childPages[i];
+    if (!childPage.parentId) continue; // main page
+
     const grandChildren = hierarchy.get(childPage.id) || [];
 
     // Find the book ID for this childPage
@@ -437,38 +565,38 @@ async function createBookStackStructure(reporter?: any): Promise<{ shelves: numb
       currentPageIndex++;
       progress('pages', `Creating page ${currentPageIndex}/${totalPages}: ${grandChild.title}`, currentPageIndex, totalPages);
 
-      const grandBodyHtml = getPageBody(grandChild);
-      const grandHtml = convertStorageToHtml(grandBodyHtml, grandChild.id);
+      const subpages = hierarchy.get(grandChild.id) || [];
+      if (subpages.length) {
+        // grandChild as chapter
+        try {
+          const chapterResp = await axios.createChapter({
+            name: grandChild.title,
+            book_id: bookId
+          });
+          chapterCount++;
+          log(`  ✓ Created chapter: ${grandChild.title}`, 'success');
 
-      try {
-        const grandPageResp = await axios.createPage({
-          book_id: bookId,
-          name: grandChild.title,
-          html: grandHtml || '<p></p>'
-        });
-        pageCount++;
+          const params = { chapter_id: chapterResp.data.id };
+          await createPage(grandChild, params); // Create general page for chapter
+          for (let subpage of subpages) { // Create subpage for chapter
+            await createPage(subpage, params);
+          }
 
-        if (attachmentsByPage[grandChild.id]) {
-          attachmentsByPage[grandChild.id].pageNewId = grandPageResp.data.id;
+          progress('pages', `Created chapter: ${grandChild.title}`, currentPageIndex, totalPages);
+        } catch (err) {
+          log(`  ✗ Error creating chapter ${grandChild.title}: ${err.message}`, 'error');
         }
-
-        log(`  ✓ Created page: ${grandChild.title}`, 'success');
-        progress('pages', `Created page: ${grandChild.title}`, currentPageIndex, totalPages);
-      } catch (err: any) {
-        log(`  ✗ Error creating page ${grandChild.title}: ${err.message}`, 'error');
+      } else {
+        // grandChild as page
+        if (await createPage(grandChild, { book_id: bookId }))
+          progress('pages', `Created page: ${grandChild.title}`, currentPageIndex, totalPages);
       }
     }
   }
 
   if (reporter) reporter.complete({ phase: 'pages', message: `Created ${pageCount} pages`, counters: getCounters() });
 
-  // Assign books to shelf
-  if (bookIds.length > 0) {
-    await axios.updateShelf(shelfId, { books: bookIds });
-    log(`✓ Assigned ${bookIds.length} books to shelf`, 'success');
-  }
-
-  return { shelves: 1, books: bookCount, pages: pageCount };
+  return getCounters();
 }
 
 // Save attachment records
@@ -528,7 +656,7 @@ if (process.argv[3] === 'xml-import') {
 }
 
 // Exported function for web interface
-export async function runXmlImport(folder: string, reporter?: any): Promise<{ shelves: number; books: number; chapters: number; pages: number }> {
+export async function runXmlImport(folder: string, reporter?: any): Promise<{ shelfId: number; shelves: number; books: number; chapters: number; pages: number }> {
   reloadEnvConfig();
   subDirectory = folder;
 
@@ -572,9 +700,10 @@ export async function runXmlImport(folder: string, reporter?: any): Promise<{ sh
   saveAttachmentRecords();
 
   return {
+    shelfId: shelfId,
     shelves: result.shelves,
     books: result.books,
-    chapters: 0,
+    chapters: result.chapters,
     pages: result.pages,
   };
 }
